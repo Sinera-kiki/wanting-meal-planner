@@ -33,9 +33,13 @@ async def _llm_chat(messages: list[dict], max_tokens: int = 7000) -> str:
         resp = await client.post(f"{base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": model, "messages": messages, "max_tokens": max_tokens, "response_format": {"type": "json_object"}})
     resp.raise_for_status(); return resp.json()["choices"][0]["message"]["content"]
 
-def _require_user(x_user_id: Optional[str]) -> dict:
-    if not x_user_id: raise HTTPException(status_code=401, detail="missing X-User-ID")
-    return {"userId": x_user_id, "username": x_user_id, "email": None}
+def _require_user(x_user_id: Optional[str] = Header(None, alias="X-User-ID"), x_forwarded_for: Optional[str] = Header(None, alias="X-Forwarded-For")) -> dict:
+    user_id = (x_user_id or "").strip()
+    if not user_id and x_forwarded_for:
+        user_id = x_forwarded_for.split(",")[0].strip()
+    if not user_id:
+        user_id = "guest_user"
+    return {"userId": user_id, "username": user_id, "email": None}
 
 
 Category = Literal["蔬菜", "水果", "乳制品", "蛋白质", "主食", "调味及其他"]
@@ -541,13 +545,13 @@ def health() -> dict:
 
 
 @app.get("/api/whoami")
-def whoami(x_user_id: Optional[str] = Header(None, alias="X-User-ID")):
-    return _require_user(x_user_id)
+def whoami(x_user_id: Optional[str] = Header(None, alias="X-User-ID"), x_forwarded_for: Optional[str] = Header(None, alias="X-Forwarded-For")):
+    return _require_user(x_user_id, x_forwarded_for)
 
 
 @app.get("/api/meal-plan/current")
-def current_plan(x_user_id: Optional[str] = Header(None, alias="X-User-ID")):
-    user = _require_user(x_user_id)
+def current_plan(x_user_id: Optional[str] = Header(None, alias="X-User-ID"), x_forwarded_for: Optional[str] = Header(None, alias="X-Forwarded-For")):
+    user = _require_user(x_user_id, x_forwarded_for)
     row = _load_current(user["userId"])
     if not row:
         return {"plan": None, "preferences": None, "checkedItems": [], "stale": False}
@@ -557,8 +561,8 @@ def current_plan(x_user_id: Optional[str] = Header(None, alias="X-User-ID")):
 
 
 @app.post("/api/meal-plan/generate", response_model=Plan)
-async def generate_plan(body: Preferences, x_user_id: Optional[str] = Header(None, alias="X-User-ID")):
-    user = _require_user(x_user_id)
+async def generate_plan(body: Preferences, x_user_id: Optional[str] = Header(None, alias="X-User-ID"), x_forwarded_for: Optional[str] = Header(None, alias="X-Forwarded-For")):
+    user = _require_user(x_user_id, x_forwarded_for)
     plan: Optional[Plan] = None
     try:
         raw = await _llm_chat([{"role": "user", "content": _plan_prompt(body)}])
@@ -587,8 +591,8 @@ async def generate_plan(body: Preferences, x_user_id: Optional[str] = Header(Non
 
 
 @app.post("/api/meal-plan/swap", response_model=Plan)
-async def swap_meal(body: SwapIn, x_user_id: Optional[str] = Header(None, alias="X-User-ID")):
-    user = _require_user(x_user_id)
+async def swap_meal(body: SwapIn, x_user_id: Optional[str] = Header(None, alias="X-User-ID"), x_forwarded_for: Optional[str] = Header(None, alias="X-Forwarded-For")):
+    user = _require_user(x_user_id, x_forwarded_for)
     idx = next((i for i, meal in enumerate(body.plan.meals) if meal.id == body.mealId), None)
     if idx is None:
         raise HTTPException(status_code=404, detail="没有找到这一顿")
@@ -630,8 +634,8 @@ async def swap_meal(body: SwapIn, x_user_id: Optional[str] = Header(None, alias=
 
 
 @app.put("/api/meal-plan/checks")
-def save_checks(body: ChecksIn, x_user_id: Optional[str] = Header(None, alias="X-User-ID")):
-    user = _require_user(x_user_id)
+def save_checks(body: ChecksIn, x_user_id: Optional[str] = Header(None, alias="X-User-ID"), x_forwarded_for: Optional[str] = Header(None, alias="X-Forwarded-For")):
+    user = _require_user(x_user_id, x_forwarded_for)
     try:
         with _get_db_conn() as conn:
             conn.execute("UPDATE meal_plans SET checked_items = %s, updated_at = NOW() WHERE owner_id = %s", (Jsonb(body.checkedItems), user["userId"]))

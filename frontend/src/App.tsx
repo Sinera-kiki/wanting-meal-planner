@@ -37,7 +37,14 @@ const presetSlots: Record<string,string[]> = {
 const categoryIcon: Record<string, string> = { 蔬菜: '🥬', 水果: '🍎', 乳制品: '🥛', 蛋白质: '🥚', 主食: '🍚', 调味及其他: '🧂' }
 const defaultPref: Pref = { budget: 100, flavors: [], avoid: '', pantry: '', max_minutes: 30, meal_slots: defaultSlots, preference_mode: 'balanced', staple_preferences: [], meal_styles: [], equipment: ['灶台'] }
 const normalizePref = (value: Partial<Pref> | null | undefined): Pref => ({ ...defaultPref, ...(value || {}), meal_slots: value?.meal_slots?.length ? value.meal_slots : defaultSlots, flavors: value?.flavors || [], staple_preferences: value?.staple_preferences || [], meal_styles: value?.meal_styles || [], equipment: value?.equipment?.length ? value.equipment : ['灶台'] })
-const fmt = (n: number) => Number.isInteger(n) ? String(n) : n.toFixed(1)
+const getUid = () => {
+  try {
+    let id = window.localStorage.getItem('mp_uid')
+    if (!id) { id = 'u_' + Math.random().toString(36).slice(2, 10); window.localStorage.setItem('mp_uid', id) }
+    return id
+  } catch { return 'u_anon' }
+}
+const authHeaders = (): Record<string, string> => ({ 'Content-Type': 'application/json', 'X-User-ID': getUid() })
 
 export default function App() {
   const [pref, setPref] = useState<Pref>(defaultPref)
@@ -55,7 +62,7 @@ export default function App() {
 
   useEffect(() => {
     if (DEMO_MODE) { setRestoring(false); return }
-    fetch('/api/meal-plan/current').then(async r => {
+    fetch('/api/meal-plan/current', { headers: authHeaders() }).then(async r => {
       if (!r.ok) return
       const data = await r.json()
       if (data.plan) setPlan(data.plan)
@@ -83,7 +90,7 @@ export default function App() {
         await new Promise(resolve => window.setTimeout(resolve, 650))
         setPlan(buildDemoPlan(pref)); setSavedPref({ ...pref }); setStaleWeek(false); setChecked(new Set()); setTab('plan'); return
       }
-      const r = await fetch('/api/meal-plan/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pref) })
+      const r = await fetch('/api/meal-plan/generate', { method: 'POST', headers: authHeaders(), body: JSON.stringify(pref) })
       if (!r.ok) throw new Error('生成失败')
       setPlan(await r.json()); setSavedPref({ ...pref }); setStaleWeek(false); setChecked(new Set()); setTab('plan')
     } catch {
@@ -100,7 +107,7 @@ export default function App() {
         await new Promise(resolve => window.setTimeout(resolve, 450))
         next = demoSwap(plan, meal.id)
       } else {
-        const r = await fetch('/api/meal-plan/swap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ preferences: pref, plan, mealId: meal.id }) })
+        const r = await fetch('/api/meal-plan/swap', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ preferences: pref, plan, mealId: meal.id }) })
         if (!r.ok) throw new Error('换菜失败')
         next = await r.json()
       }
@@ -118,7 +125,7 @@ export default function App() {
     const key = `${item.category}-${item.name}`
     setChecked(prev => {
       const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key)
-      if (!DEMO_MODE) fetch('/api/meal-plan/checks', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ checkedItems: [...next] }) }).catch(() => {})
+      if (!DEMO_MODE) fetch('/api/meal-plan/checks', { method: 'PUT', headers: authHeaders(), body: JSON.stringify({ checkedItems: [...next] }) }).catch(() => {})
       return next
     })
   }
