@@ -37,6 +37,12 @@ const presetSlots: Record<string,string[]> = {
 const categoryIcon: Record<string, string> = { 蔬菜: '🥬', 水果: '🍎', 乳制品: '🥛', 蛋白质: '🥚', 主食: '🍚', 调味及其他: '🧂' }
 const defaultPref: Pref = { budget: 100, flavors: [], avoid: '', pantry: '', max_minutes: 30, meal_slots: defaultSlots, preference_mode: 'balanced', staple_preferences: [], meal_styles: [], equipment: ['灶台'] }
 const normalizePref = (value: Partial<Pref> | null | undefined): Pref => ({ ...defaultPref, ...(value || {}), meal_slots: value?.meal_slots?.length ? value.meal_slots : defaultSlots, flavors: value?.flavors || [], staple_preferences: value?.staple_preferences || [], meal_styles: value?.meal_styles || [], equipment: value?.equipment?.length ? value.equipment : ['灶台'] })
+const fmt = (n: any) => {
+  if (n === null || n === undefined || n === '') return ''
+  const num = Number(n)
+  if (Number.isNaN(num)) return String(n)
+  return Number.isInteger(num) ? String(num) : num.toFixed(1)
+}
 const getUid = () => {
   try {
     let id = window.localStorage.getItem('mp_uid')
