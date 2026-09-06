@@ -7,7 +7,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-JSONB-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![PWA](https://img.shields.io/badge/PWA-Mobile_First-5A0FC8?logo=pwa&logoColor=white)](https://web.dev/progressive-web-apps/)
 
-**[在线体验 Demo](https://sinera-kiki.github.io/wanting-meal-planner/)** · **[查看源码](https://github.com/Sinera-kiki/wanting-meal-planner)**
+**[在线体验 (真实全栈已上线)](http://154.8.153.135)** · **[GitHub Pages 镜像](https://sinera-kiki.github.io/wanting-meal-planner/)** · **[查看源码](https://github.com/Sinera-kiki/wanting-meal-planner)**
 
 ---
 
@@ -157,7 +157,7 @@ flowchart TB
 | **移动端体验** | CSS 自适应 + Safe Area + PWA | 针对手机端竖屏优化，支持 Safari “添加到主屏幕” |
 | **后端框架** | Python 3.11 + FastAPI + Pydantic v2 | 异步支持大模型 API 调用，数据模型序列化与校验性能优异 |
 | **数据库** | PostgreSQL + JSONB | 关系型字段索引与嵌套餐单数据的高效读写 |
-| **部署方案** | Nginx + Systemd / GitHub Pages | 云端生产全栈常驻运行 + 公网高保真交互演示版 |
+| **部署方案** | Nginx + Systemd (腾讯云全栈已上线) / GitHub Pages (公网镜像) | 云端生产全栈常驻运行 + 公网高保真交互演示版 |
 
 ---
 
