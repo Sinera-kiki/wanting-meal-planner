@@ -87,7 +87,9 @@ export function buildDemoPlan(input: string[] | any) {
     const isRice = title.includes('饭'), isPowder = /粉|米线/.test(title), isGrain = /杂粮|藜麦|全麦/.test(title)
     const staple = isRice ? '即食米饭' : isPowder ? (title.includes('米线')?'米线':'粉丝') : isGrain ? '即食杂粮饭' : '荞麦面'
     const minutes = Math.min(Number(prefs.max_minutes || 30), prefs.preference_mode === 'quick' ? 15 : 20)
-    return { id:slot,day,date,mealType,title,emoji:prefs.preference_mode==='light'?'🥗':mealType==='午餐'?'🍚':'🍲',minutes,tags:[prefs.preference_mode==='quick'?'快手':'主食轮换',`${minutes}分钟`],nutrition:'主食、蛋白质和蔬菜搭配完整',ingredients:[ing('番茄',1,'个','蔬菜'),ing('西兰花',150,'克','蔬菜'),ing(protein,100,'克','蛋白质'),ing(staple,1,'份','主食')],steps:['洗净并切好食材','处理蛋白质与耐煮食材','加入主食和蔬菜，调味后即可'] }
+    const stapleQty = /面|粉丝/.test(staple) ? 100 : 1
+    const stapleUnit = /面|粉丝/.test(staple) ? '克' : '份'
+    return { id:slot,day,date,mealType,title,emoji:prefs.preference_mode==='light'?'🥗':mealType==='午餐'?'🍚':'🍲',minutes,tags:[prefs.preference_mode==='quick'?'快手':'主食轮换',`${minutes}分钟`],nutrition:'主食、蛋白质和蔬菜搭配完整',ingredients:[ing('番茄',1,'个','蔬菜'),ing('西兰花',150,'克','蔬菜'),ing(protein,100,'克','蛋白质'),ing(staple,stapleQty,stapleUnit,'主食')],steps:['洗净并切好食材','处理蛋白质与耐煮食材','加入主食和蔬菜，调味后即可'] }
   })
   const breakfastCount = generated.filter(m => m.mealType === '早餐').length
   const mainCount = generated.length - breakfastCount
