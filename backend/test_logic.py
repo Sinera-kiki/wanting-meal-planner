@@ -49,7 +49,26 @@ def run():
     assert any("粉丝" in x for x in diff.removed)
     assert plan.estimatedCostMin <= plan.estimatedCostMax
     assert date.fromisoformat(plan.weekStart)
-    print("logic tests passed", {"meals": len(plan.meals), "shopping": len(plan.shoppingList), "pantryUsed": plan.pantryUsed})
+
+    one = Preferences(budget=30, flavors=["清淡"], meal_slots=["wed-b"])
+    one_plan = _fallback_plan(one)
+    assert len(one_plan.meals) == 1
+    assert one_plan.meals[0].id == "wed-b" and one_plan.meals[0].mealType == "早餐"
+
+    sparse = Preferences(budget=80, flavors=["鲜香"], meal_slots=["mon-b", "wed-d", "sun-l"])
+    sparse_plan = _fallback_plan(sparse)
+    assert [m.id for m in sparse_plan.meals] == ["mon-b", "wed-d", "sun-l"]
+    assert [m.day for m in sparse_plan.meals] == ["周一", "周三", "周日"]
+
+    all_slots = [f"{d}-{m}" for d in ("mon","tue","wed","thu","fri","sat","sun") for m in ("b","l","d")]
+    full_week = Preferences(budget=300, flavors=[], meal_slots=all_slots)
+    full_plan = _fallback_plan(full_week)
+    assert len(full_plan.meals) == 21
+    assert len({m.id for m in full_plan.meals}) == 21
+    assert len({m.title for m in full_plan.meals}) == 21
+    assert full_plan.estimatedCostMin < full_plan.estimatedCostMax
+
+    print("logic tests passed", {"default": len(plan.meals), "single": len(one_plan.meals), "sparse": len(sparse_plan.meals), "full": len(full_plan.meals)})
 
 
 if __name__ == "__main__":

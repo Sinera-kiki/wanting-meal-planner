@@ -26,12 +26,43 @@ function shopping(list: Meal[]): Shop[] {
   return [...map.values()]
 }
 
-export const mockPlan = {
-  summary:'先吃绿叶菜，再用耐储食材收尾；9顿尽量复用原料，一个人也不浪费。',
-  weekStart:'2026-09-07',estimatedCostMin:78,estimatedCostMax:96,budgetWarning:false,
-  meals,shoppingList:shopping(meals),pantryUsed:['粉丝 2把','鸡蛋 2个'],
-  tips:['绿叶菜集中在周一至周三，洗净沥干后用厨房纸包好冷藏','蛋白质按单顿分装冷冻，前一晚移到冷藏解冻','周五后优先使用胡萝卜、紫菜、菌菇和冷冻食材'],lastShoppingDelta:null,
+const dayMeta = [['mon','周一'],['tue','周二'],['wed','周三'],['thu','周四'],['fri','周五'],['sat','周六'],['sun','周日']] as const
+const mealMeta = [['b','早餐'],['l','午餐'],['d','晚餐']] as const
+const slotOrder = dayMeta.flatMap(([d]) => mealMeta.map(([m]) => `${d}-${m}`))
+const defaultSlots = ['mon-d','tue-d','wed-d','thu-d','fri-d','sat-l','sat-d','sun-l','sun-d']
+
+export function buildDemoPlan(selectedSlots: string[]) {
+  const selected = [...new Set(selectedSlots)].filter(x => slotOrder.includes(x)).sort((a,b) => slotOrder.indexOf(a)-slotOrder.indexOf(b))
+  const known = new Map(meals.map(m => [m.id, m]))
+  const breakfasts = ['香蕉燕麦酸奶杯','番茄鸡蛋全麦吐司','玉米豆浆水果碗','紫薯酸奶坚果碗','豆腐蔬菜汤面','花生酱香蕉吐司','燕麦鸡蛋蔬菜粥']
+  const lunchDinner = ['番茄豆腐拌面','菌菇鸡胸荞麦面','西兰花虾滑米线','胡萝卜鸡蛋炒面','酸汤豆皮土豆粉','玉米鸡肉汤面','香菇豆腐粉丝煲','番茄虾滑拌面','西葫芦鸡胸米粉','紫菜豆腐汤面','胡萝卜玉米荞麦面','菌菇鸡蛋炒面','番茄豆皮米线','西兰花鸡肉拌面']
+  let mainIndex = 0
+  const generated = selected.map(slot => {
+    const existing = known.get(slot)
+    if (existing) return JSON.parse(JSON.stringify(existing))
+    const [dayCode, mealCode] = slot.split('-')
+    const dayIndex = dayMeta.findIndex(([code]) => code === dayCode)
+    const day = dayMeta[dayIndex]?.[1] || '周一'
+    const mealType = mealMeta.find(([code]) => code === mealCode)?.[1] || '晚餐'
+    const date = `2026-09-${String(7 + Math.max(dayIndex,0)).padStart(2,'0')}`
+    if (mealType === '早餐') {
+      const title = breakfasts[Math.max(dayIndex,0)]
+      return { id:slot,day,date,mealType,title,emoji:'☀️',minutes:10,tags:['快手早餐','10分钟'],nutrition:'主食、蛋白质与水果搭配完整',ingredients:[ing('即食燕麦',40,'克','主食'),ing('无糖酸奶',1,'盒','蛋白质'),ing('时令水果',1,'份','蔬菜')],steps:['准备燕麦、酸奶和水果','水果切成适口小块','依次装入杯中，拌匀即可'] }
+    }
+    const title = lunchDinner[mainIndex++ % lunchDinner.length]
+    return { id:slot,day,date,mealType,title,emoji:mealType==='午餐'?'🥗':'🍲',minutes:15,tags:['15分钟','营养均衡'],nutrition:'主食、蛋白质和蔬菜搭配完整',ingredients:[ing('番茄',1,'个','蔬菜'),ing('鲜香菇',100,'克','蔬菜'),ing('嫩豆腐',120,'克','蛋白质'),ing(mealType==='午餐'?'荞麦面':'粉丝',1,mealType==='午餐'?'份':'把','主食')],steps:['洗净并切好食材','先煮熟蛋白质与耐煮食材','加入主食和其余蔬菜，调味后即可'] }
+  })
+  const breakfastCount = generated.filter(m => m.mealType === '早餐').length
+  const mainCount = generated.length - breakfastCount
+  return {
+    summary:`按你选择的${generated.length}顿来安排：选几顿，就只规划几顿。`,
+    weekStart:'2026-09-07',estimatedCostMin:breakfastCount*5+mainCount*8,estimatedCostMax:breakfastCount*9+mainCount*13,budgetWarning:false,
+    meals:generated,shoppingList:shopping(generated),pantryUsed:['粉丝 2把','鸡蛋 2个'],
+    tips:['易坏食材优先安排在最早的用餐日','蛋白质按单顿分装，前一晚移到冷藏解冻','未选择的餐次不会生成，也不会计入采购量'],lastShoppingDelta:null,
+  }
 }
+
+export const mockPlan = buildDemoPlan(defaultSlots)
 
 export function demoSwap(plan: any, mealId: string) {
   const next = JSON.parse(JSON.stringify(plan))

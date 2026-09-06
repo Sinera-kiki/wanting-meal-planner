@@ -67,6 +67,10 @@ class Preferences(BaseModel):
     avoid: str = ""
     pantry: str = ""
     max_minutes: int = Field(default=15, ge=10, le=60)
+    meal_slots: list[str] = Field(
+        default_factory=lambda: ["mon-d", "tue-d", "wed-d", "thu-d", "fri-d", "sat-l", "sat-d", "sun-l", "sun-d"],
+        min_length=1, max_length=21,
+    )
 
 
 class Ingredient(BaseModel):
@@ -80,7 +84,7 @@ class Meal(BaseModel):
     id: str
     day: str
     date: str = ""
-    mealType: Literal["午餐", "晚餐"]
+    mealType: Literal["早餐", "午餐", "晚餐"]
     title: str
     emoji: str = "🍜"
     minutes: int = Field(ge=5, le=60)
@@ -122,26 +126,39 @@ class ChecksIn(BaseModel):
     checkedItems: list[str]
 
 
-DAYS = [("mon-d", "周一", "晚餐"), ("tue-d", "周二", "晚餐"), ("wed-d", "周三", "晚餐"),
-        ("thu-d", "周四", "晚餐"), ("fri-d", "周五", "晚餐"), ("sat-l", "周六", "午餐"),
-        ("sat-d", "周六", "晚餐"), ("sun-l", "周日", "午餐"), ("sun-d", "周日", "晚餐")]
-DAY_INDEX = {name: index for index, (_, name, _) in enumerate(DAYS[:5])}
-DAY_INDEX.update({"周六": 5, "周日": 6})
+DAY_DEFS = [("mon", "周一"), ("tue", "周二"), ("wed", "周三"), ("thu", "周四"),
+            ("fri", "周五"), ("sat", "周六"), ("sun", "周日")]
+MEAL_DEFS = [("b", "早餐"), ("l", "午餐"), ("d", "晚餐")]
+ALL_SLOTS = [(f"{day_code}-{meal_code}", day_name, meal_name)
+             for day_code, day_name in DAY_DEFS for meal_code, meal_name in MEAL_DEFS]
+SLOT_MAP = {slot_id: (day_name, meal_name) for slot_id, day_name, meal_name in ALL_SLOTS}
+SLOT_ORDER = {slot_id: index for index, (slot_id, _, _) in enumerate(ALL_SLOTS)}
+DAY_INDEX = {day_name: index for index, (_, day_name) in enumerate(DAY_DEFS)}
 LEAFY = ("青菜", "菠菜", "生菜", "油菜", "菜心", "茼蒿", "空心菜", "娃娃菜", "白菜")
+
+
+def _selected_slots(pref: Preferences) -> list[tuple[str, str, str]]:
+    unique = list(dict.fromkeys(pref.meal_slots))
+    invalid = [slot for slot in unique if slot not in SLOT_MAP]
+    if invalid:
+        raise HTTPException(status_code=422, detail=f"invalid meal slots: {invalid}")
+    return [(slot, *SLOT_MAP[slot]) for slot in sorted(unique, key=SLOT_ORDER.get)]
 
 
 def _week_start() -> date:
     today = date.today()
     current_monday = today - timedelta(days=today.weekday())
-    # 周末通常是在为下一周采购；工作日则继续规划本周。
     return current_monday + timedelta(days=7) if today.weekday() >= 5 else current_monday
 
 
-def _assign_schedule(plan: Plan, start: Optional[date] = None) -> Plan:
+def _assign_schedule(plan: Plan, pref: Preferences, start: Optional[date] = None) -> Plan:
+    slots = _selected_slots(pref)
+    if len(plan.meals) != len(slots):
+        raise ValueError("meal count does not match selected slots")
     start = start or _week_start()
     plan.weekStart = start.isoformat()
-    for meal, (mid, day_name, meal_type) in zip(plan.meals, DAYS):
-        meal.id, meal.day, meal.mealType = mid, day_name, meal_type
+    for meal, (slot_id, day_name, meal_type) in zip(plan.meals, slots):
+        meal.id, meal.day, meal.mealType = slot_id, day_name, meal_type
         meal.date = (start + timedelta(days=DAY_INDEX[day_name])).isoformat()
     return plan
 
@@ -177,8 +194,17 @@ def _safe_protein(avoid: str, index: int) -> tuple[str, str, float, str]:
     return safe[index % len(safe)]
 
 
-def _fallback_meals(pref: Preferences) -> list[Meal]:
-    bases = [
+def _fallback_meals(pref: Preferences, rotation: int = 0) -> list[Meal]:
+    breakfast = [
+        ("香蕉燕麦酸奶杯", "香蕉", 1, "个", "即食燕麦", 40, "克", "无糖酸奶", 1, "盒", "快手早餐"),
+        ("番茄鸡蛋全麦吐司", "番茄", 1, "个", "全麦吐司", 2, "片", "鸡蛋", 1, "个", "能量早餐"),
+        ("玉米豆浆水果碗", "冷冻玉米", 100, "克", "无糖豆浆", 1, "盒", "苹果", 1, "个", "清爽早餐"),
+        ("紫薯酸奶坚果碗", "紫薯", 1, "个", "无糖酸奶", 1, "盒", "坚果", 15, "克", "高纤早餐"),
+        ("豆腐蔬菜汤面", "番茄", 1, "个", "嫩豆腐", 100, "克", "挂面", 70, "克", "暖胃早餐"),
+        ("花生酱香蕉吐司", "香蕉", 1, "个", "全麦吐司", 2, "片", "花生酱", 1, "份", "周末早餐"),
+        ("燕麦鸡蛋蔬菜粥", "即食燕麦", 40, "克", "鸡蛋", 1, "个", "冷冻蔬菜", 80, "克", "饱腹早餐"),
+    ]
+    main = [
         ("番茄青菜{p}面", "番茄", 1, "个", "小青菜", 150, "克", "挂面", 100, "克", "清淡鲜香"),
         ("酸辣娃娃菜{p}土豆粉", "娃娃菜", 180, "克", "香菇", 80, "克", "土豆粉", 1, "包", "酸辣开胃"),
         ("菠菜菌菇{p}粉丝汤", "菠菜", 150, "克", "鲜香菇", 100, "克", "粉丝", 1, "把", "清淡暖胃"),
@@ -188,19 +214,34 @@ def _fallback_meals(pref: Preferences) -> list[Meal]:
         ("金针菇酸汤{p}土豆粉", "金针菇", 120, "克", "番茄", 1, "个", "土豆粉", 1, "包", "酸汤满足"),
         ("香菇胡萝卜{p}炒面", "鲜香菇", 100, "克", "胡萝卜", 100, "克", "挂面", 100, "克", "耐储食材"),
         ("紫菜番茄{p}粉丝汤", "紫菜", 5, "克", "番茄", 1, "个", "粉丝", 1, "把", "清淡收尾"),
+        ("西葫芦{p}拌荞麦面", "西葫芦", 180, "克", "胡萝卜", 60, "克", "荞麦面", 100, "克", "清爽快拌"),
+        ("玉米番茄{p}米线", "冷冻玉米", 80, "克", "番茄", 1, "个", "米线", 1, "包", "酸甜鲜香"),
+        ("菌菇紫菜{p}汤面", "鲜香菇", 100, "克", "紫菜", 5, "克", "挂面", 100, "克", "鲜香暖胃"),
+        ("胡萝卜西兰花{p}米粉", "胡萝卜", 80, "克", "西兰花", 150, "克", "米粉", 1, "包", "轻盈均衡"),
+        ("番茄玉米{p}拌面", "番茄", 1, "个", "冷冻玉米", 80, "克", "挂面", 100, "克", "周末收尾"),
     ]
     meals: list[Meal] = []
-    for idx, ((mid, day_name, meal_type), base) in enumerate(zip(DAYS, bases)):
-        template, veg1, q1, u1, veg2, q2, u2, staple, qs, us, tag = base
-        protein, pu, pq, emoji = _safe_protein(pref.avoid, idx)
-        title = template.format(p=protein)
-        ingredients = [I(veg1, q1, u1, "蔬菜"), I(veg2, q2, u2, "蔬菜"),
-                       I(protein, pq, pu, "蛋白质"), I(staple, qs, us, "主食")]
+    main_index = 0
+    for index, (slot_id, day_name, meal_type) in enumerate(_selected_slots(pref)):
+        if meal_type == "早餐":
+            template, veg1, q1, u1, staple, qs, us, protein, pq, pu, tag = breakfast[(DAY_INDEX[day_name] + rotation) % len(breakfast)]
+            if _is_banned(protein, pref.avoid):
+                protein, pu, pq, _ = _safe_protein(pref.avoid, index + rotation)
+            title = template if not _is_banned(template, pref.avoid) else f"{veg1}{protein}{staple}早餐"
+            ingredients = [I(veg1, q1, u1, "蔬菜"), I(staple, qs, us, "主食"), I(protein, pq, pu, "蛋白质")]
+            emoji = "☀️"
+        else:
+            base = main[(main_index + rotation) % len(main)]
+            main_index += 1
+            template, veg1, q1, u1, veg2, q2, u2, staple, qs, us, tag = base
+            protein, pu, pq, emoji = _safe_protein(pref.avoid, index + rotation)
+            title = template.format(p=protein)
+            ingredients = [I(veg1, q1, u1, "蔬菜"), I(veg2, q2, u2, "蔬菜"), I(protein, pq, pu, "蛋白质"), I(staple, qs, us, "主食")]
         meals.append(Meal(
-            id=mid, day=day_name, mealType=meal_type, title=title, emoji=emoji, minutes=15,
+            id=slot_id, day=day_name, mealType=meal_type, title=title, emoji=emoji, minutes=15,
             tags=[tag, "15分钟"], nutrition="主食、蛋白质和蔬菜搭配完整",
             ingredients=ingredients,
-            steps=[f"洗净并切好{veg1}、{veg2}，处理好{protein}", f"锅中加少量油或水，先将{protein}和耐煮食材煮熟", f"加入{staple}和其余蔬菜，调味后即可开饭"],
+            steps=["洗净并准备所有食材", "先处理蛋白质和耐煮食材", "加入主食和其余食材，调味后即可开饭"],
         ))
     return meals
 
@@ -286,15 +327,18 @@ def _shopping_diff(old: list[ShoppingItem], new: list[ShoppingItem]) -> Shopping
 def _fallback_plan(pref: Preferences) -> Plan:
     meals = _fallback_meals(pref)
     shopping, used = _shopping(meals, pref.pantry)
-    vegetarian = all(not any(k in x.name for k in ("肉", "虾", "鱼")) for x in shopping)
-    cost_min, cost_max = (58, 78) if vegetarian else (72, 98)
+    breakfasts = sum(m.mealType == "早餐" for m in meals)
+    main_meals = len(meals) - breakfasts
+    cost_min = breakfasts * 5 + main_meals * 8
+    cost_max = breakfasts * 9 + main_meals * 13
+    count = len(meals)
     plan = Plan(
-        summary="先吃绿叶菜，再用耐储食材收尾；9顿复用原料，一个人也尽量不浪费。",
+        summary=f"按你选择的{count}顿来安排：优先消耗易坏食材，再用耐储食材收尾。",
         estimatedCostMin=cost_min, estimatedCostMax=cost_max, budgetWarning=cost_max > pref.budget,
         meals=meals, shoppingList=shopping, pantryUsed=used,
-        tips=["绿叶菜集中在周一至周三，洗净沥干后用厨房纸包好冷藏", "蛋白质按单顿分装冷冻，前一晚移到冷藏解冻", "周五后优先使用胡萝卜、紫菜、菌菇和冷冻食材"],
+        tips=["易坏绿叶菜优先安排在最早的用餐日", "蛋白质按单顿分装冷冻，前一晚移到冷藏解冻", "未选择的餐次不会生成，也不会计入采购量"],
     )
-    return _assign_schedule(plan)
+    return _assign_schedule(plan, pref)
 
 
 def _extract_json(text: str) -> dict:
@@ -310,8 +354,10 @@ def _extract_json(text: str) -> dict:
 
 def _validate_plan(plan: Plan, pref: Preferences) -> list[str]:
     errors: list[str] = []
-    if len(plan.meals) != 9 or [m.id for m in plan.meals] != [x[0] for x in DAYS]:
-        errors.append("必须严格返回固定顺序的9顿")
+    slots = _selected_slots(pref)
+    expected_ids = [x[0] for x in slots]
+    if len(plan.meals) != len(slots) or [m.id for m in plan.meals] != expected_ids:
+        errors.append(f"必须严格返回用户选中的{len(slots)}顿及固定顺序")
     titles = [m.title.strip() for m in plan.meals]
     if len(set(titles)) != len(titles):
         errors.append("菜名不能重复")
@@ -321,32 +367,38 @@ def _validate_plan(plan: Plan, pref: Preferences) -> list[str]:
             errors.append(f"{meal.id}超过时间限制")
         if _is_banned(joined, pref.avoid):
             errors.append(f"{meal.id}含忌口食材")
-    late_leafy = 0
-    for meal in plan.meals[3:]:
-        if any(any(word in i.name for word in LEAFY) for i in meal.ingredients):
-            late_leafy += 1
-    if late_leafy > 1:
-        errors.append("绿叶菜应主要安排在周一至周三")
+    early_days_selected = any(DAY_INDEX[day] <= 2 for _, day, _ in slots)
+    late_leafy = sum(
+        1 for meal in plan.meals
+        if DAY_INDEX.get(meal.day, 6) > 2 and any(any(word in i.name for word in LEAFY) for i in meal.ingredients)
+    )
+    if early_days_selected and late_leafy > max(1, len(plan.meals) // 7):
+        errors.append("易坏绿叶菜应尽量安排在较早的用餐日")
+    flavor_limit = max(1, round(len(plan.meals) * 0.45))
     for flavor in pref.flavors:
         count = sum(flavor in (m.title + "".join(m.tags)) for m in plan.meals)
-        if count > 4:
-            errors.append(f"{flavor}口味重复超过4顿")
+        if count > flavor_limit:
+            errors.append(f"{flavor}口味重复超过{flavor_limit}顿")
     if plan.estimatedCostMin > plan.estimatedCostMax:
         errors.append("预算区间顺序错误")
     return errors
 
 
 def _plan_prompt(pref: Preferences) -> str:
-    return f"""你是一位擅长独居饮食规划的营养餐单助手。为北京独居用户规划一周9顿：周一至周五晚餐，周末午晚餐。每顿总耗时不超过{pref.max_minutes}分钟，偏好粉面、粉丝、土豆粉等快手一锅餐。
+    slots = _selected_slots(pref)
+    slot_text = "、".join(f"{slot_id}={day}{meal_type}" for slot_id, day, meal_type in slots)
+    count = len(slots)
+    flavor_limit = max(1, round(count * 0.45))
+    return f"""你是一位擅长独居饮食规划的营养餐单助手。用户自由选择了{count}个用餐时段：{slot_text}。只为这些时段规划，不得补充未选择的餐次。每顿总耗时不超过{pref.max_minutes}分钟；早餐可使用燕麦、吐司、酸奶等快手搭配，午晚餐偏好粉面、粉丝、土豆粉等快手餐。
 预算：{pref.budget}元；偏好口味：{','.join(pref.flavors) or '不限'}；硬性忌口：{pref.avoid or '无'}；家中已有：{pref.pantry or '无'}。
-硬约束：忌口绝不能出现；绿叶菜优先安排周一至周三；同一包装跨餐复用；每顿包含主食、蛋白质和蔬菜；口味只是偏好，不要求顿顿出现，同一种主要口味最多4顿；菜名不重复；所有步骤总耗时真实不超过限制；价格给北京生鲜零售的合理区间而非假精确值。
-只返回JSON，不要Markdown：{{"summary":"一句话","estimatedCostMin":整数,"estimatedCostMax":整数,"meals":[9个meal],"tips":[3条]}}。
-meal：{{"id":"固定id","day":"周一","mealType":"晚餐","title":"菜名","emoji":"emoji","minutes":15,"tags":["标签"],"nutrition":"一句话","ingredients":[{{"name":"食材","quantity":数值,"unit":"克/个/包/把/份/瓣","category":"蔬菜/蛋白质/主食/调味及其他"}}],"steps":["步骤1","步骤2","步骤3"]}}。
-固定id顺序：mon-d,tue-d,wed-d,thu-d,fri-d,sat-l,sat-d,sun-l,sun-d。"""
+硬约束：忌口绝不能出现；易坏绿叶菜安排在用户较早选择的用餐日；同一包装跨餐复用；每顿包含主食、蛋白质和蔬果；口味只是偏好，同一种主要口味最多{flavor_limit}顿；菜名不重复；所有步骤总耗时真实不超过限制；价格给合理区间而非假精确值。
+只返回JSON，不要Markdown：{{"summary":"一句话","estimatedCostMin":整数,"estimatedCostMax":整数,"meals":[严格{count}个meal],"tips":[3条]}}。
+meal：{{"id":"指定slot id","day":"周一","mealType":"早餐/午餐/晚餐","title":"菜名","emoji":"emoji","minutes":15,"tags":["标签"],"nutrition":"一句话","ingredients":[{{"name":"食材","quantity":数值,"unit":"克/个/包/把/份/瓣/片/盒","category":"蔬菜/蛋白质/主食/调味及其他"}}],"steps":["步骤1","步骤2","步骤3"]}}。
+meal的id必须严格按这个顺序：{','.join(x[0] for x in slots)}。"""
 
 
 def _finalize(plan: Plan, pref: Preferences) -> Plan:
-    plan = _assign_schedule(plan)
+    plan = _assign_schedule(plan, pref)
     plan.shoppingList, plan.pantryUsed = _shopping(plan.meals, pref.pantry)
     plan.budgetWarning = plan.estimatedCostMax > pref.budget
     plan.lastShoppingDelta = None
@@ -421,7 +473,7 @@ async def generate_plan(body: Preferences, x_user_id: Optional[str] = Header(Non
         data.setdefault("pantryUsed", [])
         data.setdefault("budgetWarning", False)
         plan = Plan.model_validate(data)
-        plan = _assign_schedule(plan)
+        plan = _assign_schedule(plan, body)
         errors = _validate_plan(plan, body)
         if errors:
             repair = _plan_prompt(body) + "\n上一次结果存在这些问题：" + "；".join(errors) + "。请全部修正后重新输出完整JSON。"
@@ -430,7 +482,7 @@ async def generate_plan(body: Preferences, x_user_id: Optional[str] = Header(Non
             data.setdefault("shoppingList", [])
             data.setdefault("pantryUsed", [])
             data.setdefault("budgetWarning", False)
-            plan = _assign_schedule(Plan.model_validate(data))
+            plan = _assign_schedule(Plan.model_validate(data), body)
             if _validate_plan(plan, body):
                 raise ValueError("repaired plan still violates rules")
         plan = _finalize(plan, body)
@@ -459,7 +511,7 @@ async def swap_meal(body: SwapIn, x_user_id: Optional[str] = Header(None, alias=
         if replacement.minutes > body.preferences.max_minutes or _is_banned(joined, body.preferences.avoid) or replacement.title in other_titles:
             raise ValueError("replacement violates rules")
     except Exception:
-        alternatives = _fallback_meals(body.preferences)
+        alternatives = _fallback_meals(body.preferences, rotation=3)
         for offset in range(1, len(alternatives) + 1):
             candidate = alternatives[(idx + offset) % len(alternatives)].model_copy(deep=True)
             if candidate.title not in {m.title for m in body.plan.meals if m.id != current.id}:
