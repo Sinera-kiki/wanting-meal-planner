@@ -22,28 +22,19 @@ INDEX_HTML = FRONTEND_DIST / "index.html"
 
 
 def _get_db_conn():
-    """Public adapter: configure PostgreSQL with APP_DB_* environment variables."""
     required = ["APP_DB_HOST", "APP_DB_PORT", "APP_DB_NAME", "APP_DB_USER", "APP_DB_PASSWORD"]
-    if not all(os.environ.get(key) for key in required):
-        raise RuntimeError("database is not configured")
+    if not all(os.environ.get(key) for key in required): raise RuntimeError("database is not configured")
     return psycopg.connect(host=os.environ["APP_DB_HOST"], port=int(os.environ["APP_DB_PORT"]), dbname=os.environ["APP_DB_NAME"], user=os.environ["APP_DB_USER"], password=os.environ["APP_DB_PASSWORD"], row_factory=dict_row)
 
-
 async def _llm_chat(messages: list[dict], max_tokens: int = 7000) -> str:
-    """Provider-neutral OpenAI-compatible adapter used by the public repository."""
     base_url, api_key, model = os.environ.get("APP_LLM_BASE_URL"), os.environ.get("APP_LLM_API_KEY"), os.environ.get("APP_LLM_MODEL")
-    if not base_url or not api_key or not model:
-        raise RuntimeError("LLM service is not configured")
+    if not base_url or not api_key or not model: raise RuntimeError("LLM service is not configured")
     async with httpx.AsyncClient(timeout=75) as client:
         resp = await client.post(f"{base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": model, "messages": messages, "max_tokens": max_tokens, "response_format": {"type": "json_object"}})
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
-
+    resp.raise_for_status(); return resp.json()["choices"][0]["message"]["content"]
 
 def _require_user(x_user_id: Optional[str]) -> dict:
-    """Public adapter: replace this header with your own authentication provider in production."""
-    if not x_user_id:
-        raise HTTPException(status_code=401, detail="missing X-User-ID")
+    if not x_user_id: raise HTTPException(status_code=401, detail="missing X-User-ID")
     return {"userId": x_user_id, "username": x_user_id, "email": None}
 
 
@@ -138,10 +129,20 @@ def _selected_slots(pref: Preferences) -> list[tuple[str, str, str]]:
     return [(slot, *SLOT_MAP[slot]) for slot in sorted(unique, key=SLOT_ORDER.get)]
 
 
-def _week_start() -> date:
-    today = date.today()
-    current_monday = today - timedelta(days=today.weekday())
+def _current_week_start(today: Optional[date] = None) -> date:
+    today = today or date.today()
+    return today - timedelta(days=today.weekday())
+
+
+def _week_start(today: Optional[date] = None) -> date:
+    today = today or date.today()
+    current_monday = _current_week_start(today)
     return current_monday + timedelta(days=7) if today.weekday() >= 5 else current_monday
+
+
+def _plan_is_stale(stored_week: date | str, today: Optional[date] = None) -> bool:
+    stored = date.fromisoformat(stored_week) if isinstance(stored_week, str) else stored_week
+    return stored < _current_week_start(today)
 
 
 def _assign_schedule(plan: Plan, pref: Preferences, start: Optional[date] = None) -> Plan:
@@ -288,17 +289,36 @@ def _ingredient_group(meal: Meal, groups: dict[str, tuple[str, ...]]) -> Optiona
 
 
 def _equipment_error(meal: Meal, equipment: list[str]) -> bool:
-    equipment = equipment or ["灶台"]
-    if "灶台" in equipment:
+    allowed = set(equipment or ["灶台"])
+    if "无厨具" in allowed:
+        allowed = {"无厨具"}
+    if "灶台" in allowed:
         return False
     steps = " ".join(meal.steps)
-    if equipment == ["微波炉"]:
-        return any(word in steps for word in ("热锅", "翻炒", "焯水", "煮开", "空气炸锅", "电饭锅"))
-    if equipment == ["空气炸锅"]:
-        return "空气炸锅" not in steps and "免开火" not in steps
-    if equipment == ["电饭锅"]:
-        return "电饭锅" not in steps and "免开火" not in steps
-    return False
+    stove_words = ("热锅", "炒锅", "翻炒", "焯水", "煮开", "锅中")
+    if any(word in steps for word in stove_words):
+        return True
+    tool_markers = {"微波炉": ("微波",), "空气炸锅": ("空气炸锅",), "电饭锅": ("电饭锅",)}
+    for tool, markers in tool_markers.items():
+        if tool not in allowed and any(marker in steps for marker in markers):
+            return True
+    if allowed == {"无厨具"}:
+        return not any(word in steps for word in ("免开火", "即食", "直接食用", "拌匀即可"))
+    return not any(any(marker in steps for marker in markers) for tool, markers in tool_markers.items() if tool in allowed) and "免开火" not in steps
+
+
+def _meal_structure_error(meal: Meal) -> bool:
+    categories = {item.category for item in meal.ingredients}
+    has_produce = bool(categories & {"蔬菜", "水果"})
+    has_protein = bool(categories & {"蛋白质", "乳制品"})
+    has_staple = "主食" in categories
+    return not (has_produce and has_protein and has_staple)
+
+
+def _time_realism_error(meal: Meal) -> bool:
+    text = meal.title + " " + " ".join(meal.steps)
+    minimums = {"慢炖": 40, "炖": 30, "焖饭": 25, "卤": 30, "煲汤": 30, "烘焙": 25}
+    return any(keyword in text and meal.minutes < minimum for keyword, minimum in minimums.items())
 
 
 def _parse_pantry(text: str) -> list[dict]:
@@ -415,6 +435,10 @@ def _validate_plan(plan: Plan, pref: Preferences) -> list[str]:
             errors.append(f"{meal.id}含忌口食材")
         if _equipment_error(meal, pref.equipment):
             errors.append(f"{meal.id}使用了不可用厨具")
+        if _meal_structure_error(meal):
+            errors.append(f"{meal.id}缺少主食、蛋白质或蔬果中的一类")
+        if _time_realism_error(meal):
+            errors.append(f"{meal.id}的菜式与标注耗时不匹配")
     early_days_selected = any(DAY_INDEX[day] <= 2 for _, day, _ in slots)
     late_leafy = sum(
         1 for meal in plan.meals
@@ -459,7 +483,7 @@ def _plan_prompt(pref: Preferences) -> str:
 方案模式：{mode_names[pref.preference_mode]}；预算：{pref.budget}元；每顿总耗时不超过{pref.max_minutes}分钟；可用厨具：{equipment_text}。
 软偏好（只提高推荐概率，绝不能让每顿都一样）：主食={staple_text}；餐食风格={style_text}；口味={','.join(pref.flavors) or '不限制'}。
 硬性忌口：{pref.avoid or '无'}；家中已有：{pref.pantry or '无'}。
-硬约束：忌口绝不能出现；步骤只能使用用户拥有的厨具；易坏食材安排在较早用餐日；同一包装跨餐复用；菜名不重复；耗时真实不超过限制；价格给合理区间。选择5顿及以上时，默认同一主食大类不超过约45%，同一蛋白质大类不超过3次，并轮换米饭、面食、粉类、杂粮及不同烹饪方式；用户的主食偏好是倾向而不是唯一答案。
+硬约束：忌口绝不能出现；步骤只能使用用户拥有的厨具；每餐必须同时包含主食、蛋白质来源和蔬果；易坏食材安排在较早用餐日；同一包装跨餐复用；菜名不重复；耗时必须真实，炖、焖饭、卤、煲汤等慢菜不能伪装成10或15分钟；价格给合理区间。选择5顿及以上时，默认同一主食大类不超过约45%，同一蛋白质大类不超过3次，并轮换米饭、面食、粉类、杂粮及不同烹饪方式；用户的主食偏好是倾向而不是唯一答案。
 只返回JSON，不要Markdown：{{"summary":"一句话","estimatedCostMin":整数,"estimatedCostMax":整数,"meals":[严格{count}个meal],"tips":[3条]}}。
 meal：{{"id":"指定slot id","day":"周一","mealType":"早餐/午餐/晚餐","title":"菜名","emoji":"emoji","minutes":15,"tags":["标签"],"nutrition":"一句话","ingredients":[{{"name":"食材","quantity":数值,"unit":"克/个/包/把/份/瓣/片/盒/张","category":"蔬菜/水果/乳制品/蛋白质/主食/调味及其他"}}],"steps":["步骤1","步骤2","步骤3"]}}。
 meal的id必须严格按这个顺序：{','.join(x[0] for x in slots)}。"""
@@ -526,8 +550,10 @@ def current_plan(x_user_id: Optional[str] = Header(None, alias="X-User-ID")):
     user = _require_user(x_user_id)
     row = _load_current(user["userId"])
     if not row:
-        return {"plan": None, "preferences": None, "checkedItems": []}
-    return {"plan": row["plan"], "preferences": row["preferences"], "checkedItems": row["checked_items"]}
+        return {"plan": None, "preferences": None, "checkedItems": [], "stale": False}
+    if _plan_is_stale(row["week_start"]):
+        return {"plan": None, "preferences": row["preferences"], "checkedItems": [], "stale": True}
+    return {"plan": row["plan"], "preferences": row["preferences"], "checkedItems": row["checked_items"], "stale": False}
 
 
 @app.post("/api/meal-plan/generate", response_model=Plan)
@@ -576,7 +602,7 @@ async def swap_meal(body: SwapIn, x_user_id: Optional[str] = Header(None, alias=
         replacement.id, replacement.day, replacement.date, replacement.mealType = current.id, current.day, current.date, current.mealType
         joined = replacement.title + " " + " ".join(i.name for i in replacement.ingredients)
         other_titles = {m.title for m in body.plan.meals if m.id != current.id}
-        if replacement.minutes > body.preferences.max_minutes or _is_banned(joined, body.preferences.avoid) or replacement.title in other_titles or _equipment_error(replacement, body.preferences.equipment):
+        if replacement.minutes > body.preferences.max_minutes or _is_banned(joined, body.preferences.avoid) or replacement.title in other_titles or _equipment_error(replacement, body.preferences.equipment) or _meal_structure_error(replacement) or _time_realism_error(replacement):
             raise ValueError("replacement violates rules")
     except Exception:
         alternatives = _fallback_meals(body.preferences, rotation=3)

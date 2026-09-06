@@ -20,7 +20,8 @@ except ModuleNotFoundError:
 from backend.app import (
     Preferences, _fallback_plan, _is_banned, _parse_pantry,
     _shopping, _shopping_diff, _validate_plan, _ingredient_group,
-    STAPLE_GROUPS, PROTEIN_GROUPS, _equipment_error,
+    STAPLE_GROUPS, PROTEIN_GROUPS, _equipment_error, _meal_structure_error,
+    _time_realism_error, _plan_is_stale, Meal, I,
 )
 
 
@@ -89,6 +90,19 @@ def run():
 
     legacy = Preferences.model_validate({"budget": 100, "flavors": ["酸辣"], "meal_slots": ["mon-d"]})
     assert legacy.preference_mode == "balanced" and legacy.equipment == ["灶台"]
+
+    assert _plan_is_stale("2026-08-24", date(2026, 9, 2))
+    assert not _plan_is_stale("2026-08-31", date(2026, 9, 2))
+    slow = Meal(id="x", day="周一", mealType="晚餐", title="土豆牛肉焖饭", minutes=15, tags=[], nutrition="", ingredients=[I("米饭",1,"份","主食"),I("牛肉",100,"克","蛋白质"),I("土豆",1,"个","蔬菜")], steps=["焖饭至熟","准备食材","装盘"])
+    assert _time_realism_error(slow)
+    incomplete = slow.model_copy(deep=True)
+    incomplete.title = "清炒青菜"
+    incomplete.ingredients = [I("青菜",150,"克","蔬菜")]
+    assert _meal_structure_error(incomplete)
+    assert not _meal_structure_error(slow)
+    mixed_tools = Preferences(equipment=["微波炉","空气炸锅"], preference_mode="custom", max_minutes=10, meal_slots=["mon-d"])
+    mixed_plan = _fallback_plan(mixed_tools)
+    assert not _equipment_error(mixed_plan.meals[0], mixed_tools.equipment)
 
     print("logic tests passed", {"default": len(plan.meals), "single": len(one_plan.meals), "sparse": len(sparse_plan.meals), "full": len(full_plan.meals)})
 

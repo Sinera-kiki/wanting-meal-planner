@@ -50,6 +50,7 @@ export default function App() {
   const [notice, setNotice] = useState('')
   const [restoring, setRestoring] = useState(true)
   const [toast, setToast] = useState('')
+  const [staleWeek, setStaleWeek] = useState(false)
 
   useEffect(() => {
     if (DEMO_MODE) { setRestoring(false); return }
@@ -59,6 +60,7 @@ export default function App() {
       if (data.plan) setPlan(data.plan)
       if (data.preferences) { const restored = normalizePref(data.preferences); setPref(restored); setSavedPref(restored) }
       if (data.checkedItems) setChecked(new Set(data.checkedItems))
+      if (data.stale) setStaleWeek(true)
     }).catch(() => {}).finally(() => setRestoring(false))
   }, [])
 
@@ -78,11 +80,11 @@ export default function App() {
     try {
       if (DEMO_MODE) {
         await new Promise(resolve => window.setTimeout(resolve, 650))
-        setPlan(buildDemoPlan(pref)); setSavedPref({ ...pref }); setChecked(new Set()); setTab('plan'); return
+        setPlan(buildDemoPlan(pref)); setSavedPref({ ...pref }); setStaleWeek(false); setChecked(new Set()); setTab('plan'); return
       }
       const r = await fetch('/api/meal-plan/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pref) })
       if (!r.ok) throw new Error('生成失败')
-      setPlan(await r.json()); setSavedPref({ ...pref }); setChecked(new Set()); setTab('plan')
+      setPlan(await r.json()); setSavedPref({ ...pref }); setStaleWeek(false); setChecked(new Set()); setTab('plan')
     } catch {
       setNotice('刚刚有点忙，请再试一次')
     } finally { setLoading(false) }
@@ -124,6 +126,9 @@ export default function App() {
     const d = new Date(`${value}T00:00:00`)
     return Number.isNaN(d.getTime()) ? '' : `${d.getMonth() + 1}月${d.getDate()}日`
   }
+  const prefSignature = (value: Pref) => JSON.stringify({ ...value, flavors:[...value.flavors].sort(), meal_slots:[...value.meal_slots].sort(), staple_preferences:[...value.staple_preferences].sort(), meal_styles:[...value.meal_styles].sort(), equipment:[...value.equipment].sort() })
+  const preferencesDirty = !!(plan && savedPref && prefSignature(pref) !== prefSignature(savedPref))
+  const safetyDirty = !!(savedPref && (pref.avoid !== savedPref.avoid || pref.equipment.join('|') !== savedPref.equipment.join('|')))
 
   return <div className="app-shell">
     <header className="topbar">
@@ -135,6 +140,7 @@ export default function App() {
     <main>
       {restoring && <section className="restore-page"><span className="spinner dark"/><p>正在取回这周的餐单…</p></section>}
       {!restoring && !plan && <section className="onboarding">
+        {staleWeek && <div className="week-renew"><b>新的一周到了</b><span>上周餐单已收起，你的设置已经保留。</span></div>}
         {DEMO_MODE && <div className="demo-badge">公开演示版 · 使用示例数据</div>}
         <div className="hero-art"><span className="leaf leaf-a">●</span><span className="leaf leaf-b">●</span><div className="bowl" aria-hidden="true"><svg viewBox="0 0 100 100"><path d="M18 46h64c0 24-13 38-32 38S18 70 18 46Z" fill="#fffaf0" stroke="#345c43" strokeWidth="4"/><path d="M26 45c5-9 13-14 24-14s20 5 25 14" fill="none" stroke="#dc7c43" strokeWidth="5" strokeLinecap="round"/><path d="M39 27c-3-7 4-9 1-15M57 27c-3-7 4-9 1-15" fill="none" stroke="#93ab78" strokeWidth="4" strokeLinecap="round"/><path d="M32 57h36" stroke="#d9c7a6" strokeWidth="3" strokeLinecap="round"/></svg></div></div>
         <p className="eyebrow">MEAL PLANNER</p>
@@ -175,6 +181,7 @@ export default function App() {
       {plan && tab === 'settings' && <section className="settings-page">
         <p className="eyebrow">PREFERENCES</p><h1>调整这一周</h1><p className="subcopy">可以沿用上次设置，也可以只改这一周。</p>
         <PreferenceForm pref={pref} setPref={setPref} toggleFlavor={toggleFlavor} savedPref={savedPref} />
+        {preferencesDirty && <div className={`change-warning ${safetyDirty?'important':''}`}><b>{safetyDirty?'忌口或厨具已改变':'设置已经调整'}</b><span>重新生成后，新设置才会应用到餐单。</span></div>}
         {notice && <p className="notice">{notice}</p>}
         <button className="primary" onClick={generate} disabled={loading || pref.meal_slots.length === 0}>{loading ? '正在重新搭配…' : `按新偏好生成 ${pref.meal_slots.length} 顿`}</button>
       </section>}
@@ -187,9 +194,9 @@ export default function App() {
     {selected && <div className="sheet-backdrop" onClick={() => setSelected(null)}><article className="sheet" onClick={e => e.stopPropagation()}>
       <div className="grabber"/><button className="sheet-close" onClick={() => setSelected(null)}>×</button>
       <div className="sheet-hero"><span>{selected.emoji}</span><div><small>{selected.day} {showDate(selected.date)} · {selected.mealType} · {selected.minutes}分钟</small><h2>{selected.title}</h2></div></div>
-      <p className="nutrition">营养搭配 · {selected.nutrition}</p>
+      <p className="nutrition">搭配说明 · {selected.nutrition}</p>
       <h3 className="section-title">准备这些</h3><div className="ingredient-grid">{selected.ingredients.map(i => <div key={`${i.name}-${i.unit}`}><span>{i.name}</span><b>{fmt(i.quantity)}{i.unit}</b></div>)}</div>
-      <h3 className="section-title">15分钟开饭</h3><ol className="steps">{selected.steps.map((s, i) => <li key={s}><b>{i+1}</b><span>{s}</span></li>)}</ol>
+      <h3 className="section-title">预计 {selected.minutes} 分钟</h3><ol className="steps">{selected.steps.map((s, i) => <li key={s}><b>{i+1}</b><span>{s}</span></li>)}</ol>
       <button className="swap-button" disabled={swapping === selected.id} onClick={() => swap(selected)}>{swapping === selected.id ? '正在想一道新的…' : '↻ 这顿换一道'}</button>
     </article></div>}
   </div>
@@ -219,7 +226,7 @@ function PreferenceForm({ pref, setPref, toggleFlavor, savedPref }: { pref: Pref
     setPref(p => ({ ...p, ...configs[mode], preference_mode:mode })); setAdvanced(false)
   }
   return <div className="pref-card">
-    {savedPref && <button type="button" className="restore-pref" onClick={() => { setPref(normalizePref(savedPref)); setAdvanced(savedPref.preference_mode === 'custom') }}><span>↻</span><div><b>沿用我的常用设置</b><small>{savedPref.meal_slots.length}顿 · {savedPref.max_minutes}分钟 · {savedPref.staple_preferences.join('、') || '主食合理轮换'}</small></div></button>}
+    {savedPref && <button type="button" className="restore-pref" onClick={() => { setPref(normalizePref(savedPref)); setAdvanced(savedPref.preference_mode === 'custom') }}><span>↻</span><div><b>沿用上次设置</b><small>{savedPref.meal_slots.length}顿 · {savedPref.max_minutes}分钟 · {savedPref.staple_preferences.join('、') || '主食合理轮换'}</small></div></button>}
     <label className="field-label meal-count-label">这周准备自己做几顿？ <strong>{pref.meal_slots.length}顿</strong></label>
     <div className="preset-row">{Object.entries(presetSlots).map(([name, slots]) => <button type="button" key={name} onClick={() => setPref(p => ({...p, meal_slots:[...slots]}))}>{name}</button>)}</div>
     <div className="meal-schedule">

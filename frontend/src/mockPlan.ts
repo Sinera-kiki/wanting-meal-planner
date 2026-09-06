@@ -26,6 +26,31 @@ function shopping(list: Meal[]): Shop[] {
   return [...map.values()]
 }
 
+const canon = (name:string) => ({'土鸡蛋':'鸡蛋','龙口粉丝':'粉丝','小青菜':'青菜','油菜':'青菜','嫩豆腐':'豆腐','鲜香菇':'香菇','西红柿':'番茄'} as Record<string,string>)[name] || name
+function applyPantry(items: Shop[], pantry = ''): { items: Shop[]; used: string[] } {
+  const next = JSON.parse(JSON.stringify(items)) as Shop[], used:string[] = []
+  pantry.split(/[,，、;；\n]+/).map(x=>x.trim()).filter(Boolean).forEach(raw => {
+    const match = raw.match(/^(\d+(?:\.\d+)?)\s*(包|把|个|克|盒|份|瓣)\s*(.+)$/) || raw.match(/^(.+?)\s*(\d+(?:\.\d+)?)\s*(包|把|个|克|盒|份|瓣)$/)
+    const half = raw.match(/^半\s*(包|把|个|克|盒|份)\s*(.+)$/)
+    let name='', unit='', qty=0
+    if (half) { unit=half[1]; name=half[2]; qty=.5 }
+    else if (match && /^\d/.test(match[1])) { qty=Number(match[1]); unit=match[2]; name=match[3] }
+    else if (match) { name=match[1]; qty=Number(match[2]); unit=match[3] }
+    if (!name) return
+    if (canon(name)==='粉丝' && unit==='包') { qty*=3; unit='把' }
+    const item=next.find(x=>canon(x.name)===canon(name)&&x.unit===unit&&x.quantity>0)
+    if (item) { const usedQty=Math.min(item.quantity,qty); item.quantity=Math.max(0,item.quantity-usedQty); if(usedQty) used.push(`${item.name} ${usedQty}${item.unit}`) }
+  })
+  return {items:next.filter(x=>x.quantity>0),used}
+}
+
+function shoppingDelta(before: Shop[], after: Shop[]) {
+  const map=(items:Shop[])=>new Map(items.map(x=>[`${canon(x.name)}-${x.unit}`,x]))
+  const a=map(before),b=map(after),keys=new Set([...a.keys(),...b.keys()]),added:string[]=[],removed:string[]=[]
+  keys.forEach(key=>{const old=a.get(key)?.quantity||0,now=b.get(key)?.quantity||0,item=b.get(key)||a.get(key)!;const delta=now-old;if(delta>0)added.push(`${item.name} +${delta}${item.unit}`);if(delta<0)removed.push(`${item.name} -${Math.abs(delta)}${item.unit}`)})
+  return {added,removed}
+}
+
 const dayMeta = [['mon','周一'],['tue','周二'],['wed','周三'],['thu','周四'],['fri','周五'],['sat','周六'],['sun','周日']] as const
 const mealMeta = [['b','早餐'],['l','午餐'],['d','晚餐']] as const
 const slotOrder = dayMeta.flatMap(([d]) => mealMeta.map(([m]) => `${d}-${m}`))
@@ -67,11 +92,12 @@ export function buildDemoPlan(input: string[] | any) {
   const breakfastCount = generated.filter(m => m.mealType === '早餐').length
   const mainCount = generated.length - breakfastCount
   const modeName: Record<string,string> = {balanced:'合理搭配',quick:'15分钟快手',homestyle:'家常均衡',light:'轻食少油',custom:'自定义偏好'}
+  const pantry = applyPantry(shopping(generated), prefs.pantry || '')
   return {
     summary:`按「${modeName[prefs.preference_mode] || '合理搭配'}」为你安排${generated.length}顿，偏好用于排序，不会让每顿都一样。`,
     weekStart:'2026-09-07',estimatedCostMin:breakfastCount*5+mainCount*8,estimatedCostMax:breakfastCount*9+mainCount*15,budgetWarning:false,
-    meals:generated,shoppingList:shopping(generated),pantryUsed:['粉丝 2把','鸡蛋 2个'],
-    tips:['易坏食材优先安排在最早的用餐日','主食和蛋白质会在一周内主动轮换','未选择的餐次不会生成，也不会计入采购量'],lastShoppingDelta:null,
+    meals:generated,shoppingList:pantry.items,pantryUsed:pantry.used,
+    tips:['易坏食材优先安排在最早的用餐日','主食和蛋白质会在一周内主动轮换','未选择的餐次不会生成，也不会计入采购量'],lastShoppingDelta:null,demoPantry:prefs.pantry||'',
   }
 }
 
@@ -82,16 +108,21 @@ export function demoSwap(plan: any, mealId: string) {
   const target = next.meals.find((m: Meal) => m.id === mealId)
   const before = next.shoppingList as Shop[]
   if (!target) return next
+  const alternatives = [
+    ['番茄金针菇豆腐荞麦面','🍲',[ing('番茄',1,'个','蔬菜'),ing('金针菇',100,'克','蔬菜'),ing('嫩豆腐',120,'克','蛋白质'),ing('荞麦面',100,'克','主食')]],
+    ['西兰花鸡胸杂粮碗','🥗',[ing('西兰花',150,'克','蔬菜'),ing('胡萝卜',80,'克','蔬菜'),ing('鸡胸肉',100,'克','蛋白质'),ing('即食杂粮饭',1,'份','主食')]],
+    ['香菇虾仁盖饭','🍚',[ing('鲜香菇',100,'克','蔬菜'),ing('西葫芦',120,'克','蔬菜'),ing('虾仁',100,'克','蛋白质'),ing('即食米饭',1,'份','主食')]],
+    ['玉米鸡蛋粉丝汤','🌽',[ing('冷冻玉米',80,'克','蔬菜'),ing('番茄',1,'个','蔬菜'),ing('鸡蛋',1,'个','蛋白质'),ing('粉丝',1,'把','主食')]],
+    ['彩蔬豆皮全麦卷','🌯',[ing('生菜',100,'克','蔬菜'),ing('番茄',1,'个','蔬菜'),ing('豆皮',80,'克','蛋白质'),ing('全麦饼',1,'张','主食')]],
+  ] as const
+  const usedTitles = new Set(next.meals.filter((m:Meal)=>m.id!==mealId).map((m:Meal)=>m.title))
+  const seed = mealId.split('').reduce((sum,c)=>sum+c.charCodeAt(0),0)
+  const choice = alternatives.find((x,index)=>index>=seed%alternatives.length&&!usedTitles.has(x[0])) || alternatives.find(x=>!usedTitles.has(x[0])) || alternatives[0]
   const oldTitle = target.title
-  target.title = '番茄金针菇豆腐荞麦面'
-  target.emoji = '🍲'
-  target.tags = ['复用库存','清爽鲜香']
-  target.nutrition = '菌菇和豆腐提供纤维与植物蛋白'
-  target.ingredients = [ing('番茄',1,'个','蔬菜'),ing('金针菇',100,'克','蔬菜'),ing('嫩豆腐',120,'克','蛋白质'),ing('荞麦面',100,'克','主食')]
-  target.steps = ['番茄切块，金针菇去根，豆腐切块','番茄炒软后加水，放豆腐和金针菇','下荞麦面煮熟，少量盐调味']
-  next.shoppingList = shopping(next.meals)
-  const oldNames = new Set(before.map(x => x.name)), newNames = new Set(next.shoppingList.map((x: Shop) => x.name))
-  next.lastShoppingDelta = { added:[...newNames].filter(x => !oldNames.has(x)).map(x => `${x} +1份`), removed:[...oldNames].filter(x => !newNames.has(x)).map(x => `${x} -1份`) }
-  next.summary = `已将「${oldTitle}」换成更适合现有库存的快手餐。`
+  target.title = choice[0]; target.emoji = choice[1]; target.tags = ['复用现有食材','主食轮换']; target.nutrition = '主食、蛋白质和蔬菜搭配完整'; target.ingredients = choice[2]
+  target.steps = ['洗净并切好食材','处理蛋白质与耐煮食材','加入主食和蔬菜，调味后即可']
+  const pantry = applyPantry(shopping(next.meals), next.demoPantry || '')
+  next.shoppingList = pantry.items; next.pantryUsed = pantry.used; next.lastShoppingDelta = shoppingDelta(before,next.shoppingList)
+  next.summary = `已将「${oldTitle}」换成「${target.title}」，采购清单同步更新。`
   return next
 }
