@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import './styles.css'
+import { FoodIcon } from './FoodIcon'
 import { buildDemoPlan, demoSwap, mockPlan } from './mockPlan'
 
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true'
@@ -159,7 +160,7 @@ export default function App() {
           {groups.map(group => <div className="day-block" key={group.day}>
             <div className="day-label"><span>{group.day.replace('周', '')}</span><small>{group.day}</small></div>
             <div className="day-meals">{group.meals.map(meal => <button className="meal-card" key={meal.id} onClick={() => setSelected(meal)}>
-              <div className="meal-emoji">{meal.emoji}</div>
+              <div className="meal-emoji"><FoodIcon emoji={meal.emoji} title={meal.title} size={26} /></div>
               <div className="meal-main"><div className="meal-meta"><span>{showDate(meal.date)}</span><i>·</i><span>{meal.mealType}</span><i>·</i><span>{meal.minutes}分钟</span></div><h3>{meal.title}</h3><div className="tag-row">{meal.tags.slice(0,2).map(t => <b key={t}>{t}</b>)}</div></div>
               <span className="chevron">›</span>
             </button>)}</div>
@@ -193,7 +194,7 @@ export default function App() {
 
     {selected && <div className="sheet-backdrop" onClick={() => setSelected(null)}><article className="sheet" onClick={e => e.stopPropagation()}>
       <div className="grabber"/><button className="sheet-close" onClick={() => setSelected(null)}>×</button>
-      <div className="sheet-hero"><span>{selected.emoji}</span><div><small>{selected.day} {showDate(selected.date)} · {selected.mealType} · {selected.minutes}分钟</small><h2>{selected.title}</h2></div></div>
+      <div className="sheet-hero"><span><FoodIcon emoji={selected.emoji} title={selected.title} size={36} /></span><div><small>{selected.day} {showDate(selected.date)} · {selected.mealType} · {selected.minutes}分钟</small><h2>{selected.title}</h2></div></div>
       <p className="nutrition">搭配说明 · {selected.nutrition}</p>
       <h3 className="section-title">准备这些</h3><div className="ingredient-grid">{selected.ingredients.map(i => <div key={`${i.name}-${i.unit}`}><span>{i.name}</span><b>{fmt(i.quantity)}{i.unit}</b></div>)}</div>
       <h3 className="section-title">预计 {selected.minutes} 分钟</h3><ol className="steps">{selected.steps.map((s, i) => <li key={s}><b>{i+1}</b><span>{s}</span></li>)}</ol>
