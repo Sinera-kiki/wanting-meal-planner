@@ -3,7 +3,7 @@
 # 一周好好吃 (MealPlanner AI) — 腾讯云 / 任意 Linux 云服务器一键自动化部署脚本
 # 支持系统：Ubuntu 20.04/22.04/24.04, Debian 11/12, CentOS 7/8/9, TencentOS
 # ==============================================================================
-set -euo pipefail
+set -eu
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -23,7 +23,8 @@ fi
 APP_DIR="/opt/wanting-meal-planner"
 DB_NAME="meal_planner"
 DB_USER="meal_user"
-DB_PASS="$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16)"
+# 使用 openssl 生成安全随机密码，避免 tr|head 管道触发 SIGPIPE (141)
+DB_PASS="$(openssl rand -hex 12 2>/dev/null || date +%s%N | sha256sum | head -c 16)"
 
 # 2. 交互式输入大模型配置
 echo -e "\n${YELLOW}>>> 请配置大模型 API Key（推荐 DeepSeek）<<<${NC}"
@@ -75,10 +76,12 @@ echo -e "\n${YELLOW}>>> 3/5 正在同步最新源码...<<<${NC}"
 mkdir -p "$APP_DIR"
 if [ -d "$APP_DIR/.git" ]; then
   cd "$APP_DIR"
-  git fetch origin
-  git reset --hard origin/main
+  git fetch origin || git fetch https://mirror.ghproxy.com/https://github.com/Sinera-kiki/wanting-meal-planner.git || true
+  git reset --hard origin/main || true
 else
-  git clone https://github.com/Sinera-kiki/wanting-meal-planner.git "$APP_DIR"
+  git clone https://github.com/Sinera-kiki/wanting-meal-planner.git "$APP_DIR" 2>/dev/null || \
+  git clone https://mirror.ghproxy.com/https://github.com/Sinera-kiki/wanting-meal-planner.git "$APP_DIR" 2>/dev/null || \
+  git clone https://ghfast.top/https://github.com/Sinera-kiki/wanting-meal-planner.git "$APP_DIR"
   cd "$APP_DIR"
 fi
 
