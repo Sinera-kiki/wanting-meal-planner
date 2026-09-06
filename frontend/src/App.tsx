@@ -79,7 +79,16 @@ export default function App() {
   }, [toast])
 
   const groups = useMemo(() => dayOrder.map(day => ({ day, meals: plan?.meals.filter(m => m.day === day) || [] })).filter(g => g.meals.length), [plan])
-  const shoppingGroups = useMemo(() => ['蔬菜', '水果', '乳制品', '蛋白质', '主食', '调味及其他'].map(category => ({ category, items: plan?.shoppingList.filter(i => i.category === category) || [] })).filter(g => g.items.length), [plan])
+  const shoppingGroups = useMemo(() => {
+    if (!plan) return []
+    const known = ['蔬菜', '水果', '乳制品', '蛋白质', '主食', '调味及其他']
+    const present = [...new Set(plan.shoppingList.map(i => i.category || '其他'))]
+    const order = [...known.filter(c => present.includes(c)), ...present.filter(c => !known.includes(c))]
+    return order.map(category => ({
+      category,
+      items: plan.shoppingList.filter(i => (i.category || '其他') === category)
+    })).filter(g => g.items.length)
+  }, [plan])
 
   const toggleFlavor = (flavor: string) => setPref(p => ({ ...p, flavors: p.flavors.includes(flavor) ? p.flavors.filter(x => x !== flavor) : [...p.flavors, flavor] }))
 
@@ -180,8 +189,8 @@ export default function App() {
         <p className="eyebrow">SHOPPING LIST</p><h1>这周要买的</h1>
         <div className="list-progress"><div><strong>{checked.size}</strong><span> / {plan.shoppingList.length} 已完成</span></div><div className="progress-track"><i style={{width: `${plan.shoppingList.length ? checked.size / plan.shoppingList.length * 100 : 0}%`}}/></div></div>
         {plan.pantryUsed?.length > 0 && <div className="pantry-card"><b>家中库存已抵扣</b><p>{plan.pantryUsed.join('、')}</p></div>}
-        {shoppingGroups.map(group => <div className="shopping-group" key={group.category}><h2><span>{categoryIcon[group.category]}</span>{group.category}<small>{group.items.length}样</small></h2>
-          {group.items.map(item => { const key = `${item.category}-${item.name}`, done = checked.has(key); return <button className={`shop-item ${done ? 'done' : ''}`} key={key} onClick={() => toggleCheck(item)}><i>{done ? '✓' : ''}</i><span>{item.name}</span><b>{fmt(item.quantity)}{item.unit}</b></button> })}
+        {shoppingGroups.map(group => <div className="shopping-group" key={group.category}><h2><span>{categoryIcon[group.category] || '📦'}</span>{group.category}<small>{group.items.length}样</small></h2>
+          {group.items.map(item => { const key = `${item.category}-${item.name}`, done = checked.has(key); return <button type="button" className={`shop-item ${done ? 'done' : ''}`} key={key} onClick={() => toggleCheck(item)}><i>{done ? '✓' : ''}</i><span>{item.name}</span><b>{fmt(item.quantity)}{item.unit}</b></button> })}
         </div>)}
         <div className="tip-card"><b>按什么顺序吃？</b><p>{plan.tips[1]}</p><p>{plan.tips[2]}</p></div>
       </section>}
