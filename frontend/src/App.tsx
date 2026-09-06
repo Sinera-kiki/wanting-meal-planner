@@ -229,7 +229,7 @@ function PreferenceForm({ pref, setPref, toggleFlavor, savedPref }: { pref: Pref
     <p className="schedule-tip">至少选择1顿；可自由组合一周最多21顿</p>
 
     <label className="field-label">想怎么吃？</label>
-    <div className="mode-grid">{modeDefs.map(mode => <button type="button" key={mode.id} className={pref.preference_mode===mode.id?'selected':''} onClick={() => applyMode(mode.id)}><b>{mode.title}</b><small>{mode.desc}</small></button>)}</div>
+    <div className="mode-grid">{modeDefs.map(mode => <button type="button" key={mode.id} aria-pressed={pref.preference_mode===mode.id} className={pref.preference_mode===mode.id?'selected':''} onClick={() => applyMode(mode.id)}><b>{mode.title}</b><small>{mode.desc}</small></button>)}</div>
     <button type="button" className={`advanced-toggle ${advanced?'open':''}`} onClick={() => { setAdvanced(x => !x); if (!advanced) setPref(p => ({...p, preference_mode:'custom'})) }}><span>自定义偏好</span><i>{advanced?'收起':'展开'}⌄</i></button>
 
     {advanced && <div className="advanced-panel">
