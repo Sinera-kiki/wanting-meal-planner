@@ -10,9 +10,19 @@ type Meal = { id: string; day: string; date: string; mealType: string; title: st
 type ShoppingItem = Ingredient & { meals: string[] }
 type ShoppingDelta = { added: string[]; removed: string[] }
 type Plan = { summary: string; weekStart: string; estimatedCostMin: number; estimatedCostMax: number; budgetWarning: boolean; meals: Meal[]; shoppingList: ShoppingItem[]; pantryUsed: string[]; tips: string[]; lastShoppingDelta?: ShoppingDelta | null }
-type Pref = { budget: number; flavors: string[]; avoid: string; pantry: string; max_minutes: number; meal_slots: string[] }
+type PreferenceMode = 'balanced' | 'quick' | 'homestyle' | 'light' | 'custom'
+type Pref = { budget: number; flavors: string[]; avoid: string; pantry: string; max_minutes: number; meal_slots: string[]; preference_mode: PreferenceMode; staple_preferences: string[]; meal_styles: string[]; equipment: string[] }
 
-const flavorOptions = ['酸辣', '清淡', '鲜香', '少油', '微辣']
+const flavorOptions = ['酸辣', '清淡', '鲜香', '微辣']
+const stapleOptions = ['米饭', '面食', '粉类', '杂粮轻食']
+const styleOptions = ['家常菜', '一锅端', '轻食', '汤羹']
+const equipmentOptions = ['灶台', '微波炉', '电饭锅', '空气炸锅', '无厨具']
+const modeDefs: { id: PreferenceMode; title: string; desc: string }[] = [
+  { id:'balanced', title:'不挑，合理搭配', desc:'自动轮换主食和蛋白质' },
+  { id:'quick', title:'15分钟快手', desc:'步骤少，优先省时间' },
+  { id:'homestyle', title:'家常均衡', desc:'米饭和家常菜为主' },
+  { id:'light', title:'轻食少油', desc:'清爽、少油、不过重' },
+]
 const dayOrder = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const dayDefs = [['mon','周一'],['tue','周二'],['wed','周三'],['thu','周四'],['fri','周五'],['sat','周六'],['sun','周日']] as const
 const mealDefs = [['b','早餐'],['l','午餐'],['d','晚餐']] as const
@@ -23,11 +33,14 @@ const presetSlots: Record<string,string[]> = {
   '每天晚餐': dayDefs.map(([code]) => `${code}-d`),
   '全周三餐': dayDefs.flatMap(([code]) => mealDefs.map(([meal]) => `${code}-${meal}`)),
 }
-const categoryIcon: Record<string, string> = { 蔬菜: '🥬', 蛋白质: '🥚', 主食: '🍜', 调味及其他: '🧂' }
+const categoryIcon: Record<string, string> = { 蔬菜: '🥬', 水果: '🍎', 乳制品: '🥛', 蛋白质: '🥚', 主食: '🍚', 调味及其他: '🧂' }
+const defaultPref: Pref = { budget: 100, flavors: [], avoid: '', pantry: '', max_minutes: 30, meal_slots: defaultSlots, preference_mode: 'balanced', staple_preferences: [], meal_styles: [], equipment: ['灶台'] }
+const normalizePref = (value: Partial<Pref> | null | undefined): Pref => ({ ...defaultPref, ...(value || {}), meal_slots: value?.meal_slots?.length ? value.meal_slots : defaultSlots, flavors: value?.flavors || [], staple_preferences: value?.staple_preferences || [], meal_styles: value?.meal_styles || [], equipment: value?.equipment?.length ? value.equipment : ['灶台'] })
 const fmt = (n: number) => Number.isInteger(n) ? String(n) : n.toFixed(1)
 
 export default function App() {
-  const [pref, setPref] = useState<Pref>({ budget: 100, flavors: ['酸辣', '清淡'], avoid: '', pantry: '', max_minutes: 15, meal_slots: defaultSlots })
+  const [pref, setPref] = useState<Pref>(defaultPref)
+  const [savedPref, setSavedPref] = useState<Pref | null>(null)
   const [plan, setPlan] = useState<Plan | null>(DEMO_VIEW ? JSON.parse(JSON.stringify(mockPlan)) : null)
   const [selected, setSelected] = useState<Meal | null>(DEMO_VIEW === 'detail' ? JSON.parse(JSON.stringify(mockPlan.meals[0])) : null)
   const [tab, setTab] = useState<'plan' | 'list' | 'settings'>(DEMO_VIEW === 'list' ? 'list' : 'plan')
@@ -44,7 +57,7 @@ export default function App() {
       if (!r.ok) return
       const data = await r.json()
       if (data.plan) setPlan(data.plan)
-      if (data.preferences) setPref({ ...data.preferences, meal_slots: data.preferences.meal_slots?.length ? data.preferences.meal_slots : defaultSlots })
+      if (data.preferences) { const restored = normalizePref(data.preferences); setPref(restored); setSavedPref(restored) }
       if (data.checkedItems) setChecked(new Set(data.checkedItems))
     }).catch(() => {}).finally(() => setRestoring(false))
   }, [])
@@ -56,7 +69,7 @@ export default function App() {
   }, [toast])
 
   const groups = useMemo(() => dayOrder.map(day => ({ day, meals: plan?.meals.filter(m => m.day === day) || [] })).filter(g => g.meals.length), [plan])
-  const shoppingGroups = useMemo(() => ['蔬菜', '蛋白质', '主食', '调味及其他'].map(category => ({ category, items: plan?.shoppingList.filter(i => i.category === category) || [] })).filter(g => g.items.length), [plan])
+  const shoppingGroups = useMemo(() => ['蔬菜', '水果', '乳制品', '蛋白质', '主食', '调味及其他'].map(category => ({ category, items: plan?.shoppingList.filter(i => i.category === category) || [] })).filter(g => g.items.length), [plan])
 
   const toggleFlavor = (flavor: string) => setPref(p => ({ ...p, flavors: p.flavors.includes(flavor) ? p.flavors.filter(x => x !== flavor) : [...p.flavors, flavor] }))
 
@@ -65,11 +78,11 @@ export default function App() {
     try {
       if (DEMO_MODE) {
         await new Promise(resolve => window.setTimeout(resolve, 650))
-        setPlan(buildDemoPlan(pref.meal_slots)); setChecked(new Set()); setTab('plan'); return
+        setPlan(buildDemoPlan(pref)); setSavedPref({ ...pref }); setChecked(new Set()); setTab('plan'); return
       }
       const r = await fetch('/api/meal-plan/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pref) })
       if (!r.ok) throw new Error('生成失败')
-      setPlan(await r.json()); setChecked(new Set()); setTab('plan')
+      setPlan(await r.json()); setSavedPref({ ...pref }); setChecked(new Set()); setTab('plan')
     } catch {
       setNotice('刚刚有点忙，请再试一次')
     } finally { setLoading(false) }
@@ -126,8 +139,8 @@ export default function App() {
         <div className="hero-art"><span className="leaf leaf-a">●</span><span className="leaf leaf-b">●</span><div className="bowl" aria-hidden="true"><svg viewBox="0 0 100 100"><path d="M18 46h64c0 24-13 38-32 38S18 70 18 46Z" fill="#fffaf0" stroke="#345c43" strokeWidth="4"/><path d="M26 45c5-9 13-14 24-14s20 5 25 14" fill="none" stroke="#dc7c43" strokeWidth="5" strokeLinecap="round"/><path d="M39 27c-3-7 4-9 1-15M57 27c-3-7 4-9 1-15" fill="none" stroke="#93ab78" strokeWidth="4" strokeLinecap="round"/><path d="M32 57h36" stroke="#d9c7a6" strokeWidth="3" strokeLinecap="round"/></svg></div></div>
         <p className="eyebrow">MEAL PLANNER</p>
         <h1>一周吃什么，<br/><em>交给我来想。</em></h1>
-        <p className="hero-copy">先选这周准备自己做饭的时段，再按预算、口味和库存安排快手餐。选几顿，就只规划几顿。</p>
-        <PreferenceForm pref={pref} setPref={setPref} toggleFlavor={toggleFlavor} />
+        <p className="hero-copy">先选这周准备自己做饭的时段，再选择一种轻松的搭配方式。第一次简单设置，以后可以直接沿用。</p>
+        <PreferenceForm pref={pref} setPref={setPref} toggleFlavor={toggleFlavor} savedPref={savedPref} />
         {notice && <p className="notice">{notice}</p>}
         <button className="primary" onClick={generate} disabled={loading || pref.meal_slots.length === 0}>{loading ? <><span className="spinner"/>正在搭配这一周…</> : <>生成我的 {pref.meal_slots.length} 顿餐单 <span>→</span></>}</button>
         <p className="fineprint">{DEMO_MODE ? '演示版不会请求真实 AI，也不会上传你的输入' : '会优先复用食材，并照顾基础营养搭配'}</p>
@@ -160,8 +173,8 @@ export default function App() {
       </section>}
 
       {plan && tab === 'settings' && <section className="settings-page">
-        <p className="eyebrow">PREFERENCES</p><h1>调整这一周</h1><p className="subcopy">改完后会重新生成整周餐单。</p>
-        <PreferenceForm pref={pref} setPref={setPref} toggleFlavor={toggleFlavor} />
+        <p className="eyebrow">PREFERENCES</p><h1>调整这一周</h1><p className="subcopy">可以沿用上次设置，也可以只改这一周。</p>
+        <PreferenceForm pref={pref} setPref={setPref} toggleFlavor={toggleFlavor} savedPref={savedPref} />
         {notice && <p className="notice">{notice}</p>}
         <button className="primary" onClick={generate} disabled={loading || pref.meal_slots.length === 0}>{loading ? '正在重新搭配…' : `按新偏好生成 ${pref.meal_slots.length} 顿`}</button>
       </section>}
@@ -182,13 +195,31 @@ export default function App() {
   </div>
 }
 
-function PreferenceForm({ pref, setPref, toggleFlavor }: { pref: Pref; setPref: (p: Pref | ((p: Pref) => Pref)) => void; toggleFlavor: (s: string) => void }) {
+function PreferenceForm({ pref, setPref, toggleFlavor, savedPref }: { pref: Pref; setPref: (p: Pref | ((p: Pref) => Pref)) => void; toggleFlavor: (s: string) => void; savedPref: Pref | null }) {
+  const [advanced, setAdvanced] = useState(pref.preference_mode === 'custom')
   const toggleSlot = (slot: string) => setPref(p => {
     const exists = p.meal_slots.includes(slot)
     if (exists && p.meal_slots.length === 1) return p
     return { ...p, meal_slots: exists ? p.meal_slots.filter(x => x !== slot) : [...p.meal_slots, slot] }
   })
+  const toggleList = (field: 'staple_preferences' | 'meal_styles', value: string) => setPref(p => ({ ...p, preference_mode:'custom', [field]: p[field].includes(value) ? p[field].filter(x => x !== value) : [...p[field], value] }))
+  const toggleEquipment = (value: string) => setPref(p => {
+    if (value === '无厨具') return { ...p, preference_mode:'custom', equipment:['无厨具'] }
+    const current = p.equipment.filter(x => x !== '无厨具')
+    return { ...p, preference_mode:'custom', equipment: current.includes(value) ? current.filter(x => x !== value) : [...current, value] }
+  })
+  const applyMode = (mode: PreferenceMode) => {
+    const configs: Record<Exclude<PreferenceMode,'custom'>, Partial<Pref>> = {
+      balanced:{ flavors:[], staple_preferences:[], meal_styles:[], max_minutes:30 },
+      quick:{ flavors:[], staple_preferences:[], meal_styles:['一锅端'], max_minutes:15 },
+      homestyle:{ flavors:[], staple_preferences:['米饭'], meal_styles:['家常菜'], max_minutes:30 },
+      light:{ flavors:['清淡'], staple_preferences:['杂粮轻食'], meal_styles:['轻食'], max_minutes:20 },
+    }
+    if (mode === 'custom') { setAdvanced(true); setPref(p => ({...p, preference_mode:'custom'})); return }
+    setPref(p => ({ ...p, ...configs[mode], preference_mode:mode })); setAdvanced(false)
+  }
   return <div className="pref-card">
+    {savedPref && <button type="button" className="restore-pref" onClick={() => { setPref(normalizePref(savedPref)); setAdvanced(savedPref.preference_mode === 'custom') }}><span>↻</span><div><b>沿用我的常用设置</b><small>{savedPref.meal_slots.length}顿 · {savedPref.max_minutes}分钟 · {savedPref.staple_preferences.join('、') || '主食合理轮换'}</small></div></button>}
     <label className="field-label meal-count-label">这周准备自己做几顿？ <strong>{pref.meal_slots.length}顿</strong></label>
     <div className="preset-row">{Object.entries(presetSlots).map(([name, slots]) => <button type="button" key={name} onClick={() => setPref(p => ({...p, meal_slots:[...slots]}))}>{name}</button>)}</div>
     <div className="meal-schedule">
@@ -196,10 +227,27 @@ function PreferenceForm({ pref, setPref, toggleFlavor }: { pref: Pref; setPref: 
       {dayDefs.map(([dayCode, dayName]) => <div className="schedule-row" key={dayCode}><strong>{dayName}</strong>{mealDefs.map(([mealCode, mealName]) => { const slot=`${dayCode}-${mealCode}`; const active=pref.meal_slots.includes(slot); return <button type="button" aria-label={`${dayName}${mealName}`} aria-pressed={active} className={active?'active':''} key={slot} onClick={() => toggleSlot(slot)}>{active?'✓':'+'}</button> })}</div>)}
     </div>
     <p className="schedule-tip">至少选择1顿；可自由组合一周最多21顿</p>
+
+    <label className="field-label">想怎么吃？</label>
+    <div className="mode-grid">{modeDefs.map(mode => <button type="button" key={mode.id} className={pref.preference_mode===mode.id?'selected':''} onClick={() => applyMode(mode.id)}><b>{mode.title}</b><small>{mode.desc}</small></button>)}</div>
+    <button type="button" className={`advanced-toggle ${advanced?'open':''}`} onClick={() => { setAdvanced(x => !x); if (!advanced) setPref(p => ({...p, preference_mode:'custom'})) }}><span>自定义偏好</span><i>{advanced?'收起':'展开'}⌄</i></button>
+
+    {advanced && <div className="advanced-panel">
+      <label className="mini-label">主食偏好 <span>可以多选，系统仍会适当轮换</span></label>
+      <div className="chips">{stapleOptions.map(x => <button type="button" className={pref.staple_preferences.includes(x)?'selected':''} key={x} onClick={() => toggleList('staple_preferences',x)}>{x}</button>)}</div>
+      <label className="mini-label">餐食风格</label>
+      <div className="chips">{styleOptions.map(x => <button type="button" className={pref.meal_styles.includes(x)?'selected':''} key={x} onClick={() => toggleList('meal_styles',x)}>{x}</button>)}</div>
+      <label className="mini-label">每顿最多用时</label>
+      <div className="segment-row">{[10,15,30,45].map(x => <button type="button" className={pref.max_minutes===x?'selected':''} key={x} onClick={() => setPref(p => ({...p, preference_mode:'custom', max_minutes:x}))}>{x}分钟</button>)}</div>
+      <label className="mini-label">可用厨具</label>
+      <div className="chips">{equipmentOptions.map(x => <button type="button" className={pref.equipment.includes(x)?'selected':''} key={x} onClick={() => toggleEquipment(x)}>{x}</button>)}</div>
+      <label className="mini-label">口味偏好</label>
+      <div className="chips">{flavorOptions.map(f => <button type="button" className={pref.flavors.includes(f)?'selected':''} key={f} onClick={() => { toggleFlavor(f); setPref(p => ({...p, preference_mode:'custom'})) }}>{f}</button>)}</div>
+    </div>}
+
     <label className="field-label">这周预算 <strong>¥{pref.budget}</strong></label>
-    <input className="range" type="range" min="50" max="200" step="10" value={pref.budget} onChange={e => setPref(p => ({...p, budget: Number(e.target.value)}))}/>
-    <div className="range-note"><span>¥50</span><span>¥200</span></div>
-    <label className="field-label">喜欢的口味</label><div className="chips">{flavorOptions.map(f => <button className={pref.flavors.includes(f) ? 'selected' : ''} key={f} onClick={() => toggleFlavor(f)}>{f}</button>)}</div>
+    <input className="range" type="range" min="50" max="300" step="10" value={pref.budget} onChange={e => setPref(p => ({...p, budget: Number(e.target.value)}))}/>
+    <div className="range-note"><span>¥50</span><span>¥300</span></div>
     <label className="field-label" htmlFor="pantry">家里还有什么？</label><input id="pantry" value={pref.pantry} onChange={e => setPref(p => ({...p, pantry: e.target.value}))} placeholder="比如：半包粉丝、2个鸡蛋"/>
     <label className="field-label" htmlFor="avoid">不吃或忌口</label><input id="avoid" value={pref.avoid} onChange={e => setPref(p => ({...p, avoid: e.target.value}))} placeholder="没有可以留空"/>
   </div>

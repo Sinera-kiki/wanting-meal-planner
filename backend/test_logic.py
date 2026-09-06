@@ -19,7 +19,8 @@ except ModuleNotFoundError:
 
 from backend.app import (
     Preferences, _fallback_plan, _is_banned, _parse_pantry,
-    _shopping, _shopping_diff, _validate_plan,
+    _shopping, _shopping_diff, _validate_plan, _ingredient_group,
+    STAPLE_GROUPS, PROTEIN_GROUPS, _equipment_error,
 )
 
 
@@ -67,6 +68,27 @@ def run():
     assert len({m.id for m in full_plan.meals}) == 21
     assert len({m.title for m in full_plan.meals}) == 21
     assert full_plan.estimatedCostMin < full_plan.estimatedCostMax
+
+    neutral = Preferences()
+    assert neutral.flavors == [] and neutral.staple_preferences == [] and neutral.preference_mode == "balanced" and neutral.max_minutes == 30
+    neutral_plan = _fallback_plan(neutral)
+    staple_groups = [_ingredient_group(m, STAPLE_GROUPS) for m in neutral_plan.meals]
+    protein_groups = [_ingredient_group(m, PROTEIN_GROUPS) for m in neutral_plan.meals]
+    assert len(set(x for x in staple_groups if x)) >= 3
+    assert max(protein_groups.count(x) for x in set(protein_groups) if x) <= 3
+
+    powder_pref = Preferences(staple_preferences=["粉类"], preference_mode="custom")
+    powder_plan = _fallback_plan(powder_pref)
+    powder_groups = [_ingredient_group(m, STAPLE_GROUPS) for m in powder_plan.meals]
+    assert powder_groups.count("粉类") >= 2 and len(set(x for x in powder_groups if x)) >= 3
+
+    microwave = Preferences(equipment=["微波炉"], preference_mode="custom", max_minutes=10, meal_slots=["mon-d"])
+    microwave_plan = _fallback_plan(microwave)
+    assert not _equipment_error(microwave_plan.meals[0], microwave.equipment)
+    assert microwave_plan.meals[0].minutes <= 10
+
+    legacy = Preferences.model_validate({"budget": 100, "flavors": ["酸辣"], "meal_slots": ["mon-d"]})
+    assert legacy.preference_mode == "balanced" and legacy.equipment == ["灶台"]
 
     print("logic tests passed", {"default": len(plan.meals), "single": len(one_plan.meals), "sparse": len(sparse_plan.meals), "full": len(full_plan.meals)})
 

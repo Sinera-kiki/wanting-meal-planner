@@ -31,15 +31,22 @@ const mealMeta = [['b','早餐'],['l','午餐'],['d','晚餐']] as const
 const slotOrder = dayMeta.flatMap(([d]) => mealMeta.map(([m]) => `${d}-${m}`))
 const defaultSlots = ['mon-d','tue-d','wed-d','thu-d','fri-d','sat-l','sat-d','sun-l','sun-d']
 
-export function buildDemoPlan(selectedSlots: string[]) {
+export function buildDemoPlan(input: string[] | any) {
+  const prefs = Array.isArray(input) ? { meal_slots:input, preference_mode:'balanced', max_minutes:30 } : input
+  const selectedSlots: string[] = prefs.meal_slots || defaultSlots
   const selected = [...new Set(selectedSlots)].filter(x => slotOrder.includes(x)).sort((a,b) => slotOrder.indexOf(a)-slotOrder.indexOf(b))
-  const known = new Map(meals.map(m => [m.id, m]))
-  const breakfasts = ['香蕉燕麦酸奶杯','番茄鸡蛋全麦吐司','玉米豆浆水果碗','紫薯酸奶坚果碗','豆腐蔬菜汤面','花生酱香蕉吐司','燕麦鸡蛋蔬菜粥']
-  const lunchDinner = ['番茄豆腐拌面','菌菇鸡胸荞麦面','西兰花虾滑米线','胡萝卜鸡蛋炒面','酸汤豆皮土豆粉','玉米鸡肉汤面','香菇豆腐粉丝煲','番茄虾滑拌面','西葫芦鸡胸米粉','紫菜豆腐汤面','胡萝卜玉米荞麦面','菌菇鸡蛋炒面','番茄豆皮米线','西兰花鸡肉拌面']
+  const breakfasts = ['香蕉燕麦酸奶杯','番茄鸡蛋全麦吐司','玉米豆浆水果碗','紫薯酸奶坚果碗','豆腐蔬菜全麦卷','花生酱香蕉吐司','燕麦鸡蛋蔬菜粥']
+  const titles: Record<string,string[]> = {
+    balanced:['番茄青菜豆腐汤面','西兰花鸡肉盖饭','菠菜菌菇粉丝汤','彩蔬虾仁杂粮碗','香菇胡萝卜拌饭','番茄玉米米线','西葫芦荞麦面','紫菜豆腐汤饭','彩蔬全麦卷'],
+    quick:['番茄鸡蛋汤面','虾滑娃娃菜土豆粉','菌菇豆腐粉丝煲','鸡丝乌冬面','番茄米线','玉米鸡蛋拌饭','紫菜豆皮汤面'],
+    homestyle:['番茄炒蛋盖饭','香菇鸡肉盖饭','土豆牛肉盖饭','西兰花虾仁拌饭','胡萝卜豆腐盖饭','玉米鸡蛋炒饭','菌菇鸡丝汤饭'],
+    light:['彩蔬鸡胸杂粮碗','番茄豆腐全麦卷','西兰花虾仁藜麦碗','玉米鸡蛋轻食碗','菌菇豆皮荞麦面','紫薯酸奶水果碗','胡萝卜鹰嘴豆沙拉'],
+    custom:['番茄豆腐盖饭','菌菇鸡胸荞麦面','彩蔬虾仁杂粮碗','紫菜豆皮粉丝汤','西兰花鸡蛋全麦卷'],
+  }
+  const selectedTitles = titles[prefs.preference_mode || 'balanced'] || titles.balanced
+  const proteins = ['嫩豆腐','鸡胸肉','虾仁','鸡蛋','豆皮','鹰嘴豆','鱼片']
   let mainIndex = 0
   const generated = selected.map(slot => {
-    const existing = known.get(slot)
-    if (existing) return JSON.parse(JSON.stringify(existing))
     const [dayCode, mealCode] = slot.split('-')
     const dayIndex = dayMeta.findIndex(([code]) => code === dayCode)
     const day = dayMeta[dayIndex]?.[1] || '周一'
@@ -47,22 +54,28 @@ export function buildDemoPlan(selectedSlots: string[]) {
     const date = `2026-09-${String(7 + Math.max(dayIndex,0)).padStart(2,'0')}`
     if (mealType === '早餐') {
       const title = breakfasts[Math.max(dayIndex,0)]
-      return { id:slot,day,date,mealType,title,emoji:'☀️',minutes:10,tags:['快手早餐','10分钟'],nutrition:'主食、蛋白质与水果搭配完整',ingredients:[ing('即食燕麦',40,'克','主食'),ing('无糖酸奶',1,'盒','蛋白质'),ing('时令水果',1,'份','蔬菜')],steps:['准备燕麦、酸奶和水果','水果切成适口小块','依次装入杯中，拌匀即可'] }
+      return { id:slot,day,date,mealType,title,emoji:'☀️',minutes:10,tags:['快手早餐','营养均衡'],nutrition:'主食、蛋白质与水果搭配完整',ingredients:[ing('即食燕麦',40,'克','主食'),ing('无糖酸奶',1,'盒','乳制品'),ing('时令水果',1,'份','水果')],steps:['准备燕麦、酸奶和水果','水果切成适口小块','依次装入杯中，拌匀即可'] }
     }
-    const title = lunchDinner[mainIndex++ % lunchDinner.length]
-    return { id:slot,day,date,mealType,title,emoji:mealType==='午餐'?'🥗':'🍲',minutes:15,tags:['15分钟','营养均衡'],nutrition:'主食、蛋白质和蔬菜搭配完整',ingredients:[ing('番茄',1,'个','蔬菜'),ing('鲜香菇',100,'克','蔬菜'),ing('嫩豆腐',120,'克','蛋白质'),ing(mealType==='午餐'?'荞麦面':'粉丝',1,mealType==='午餐'?'份':'把','主食')],steps:['洗净并切好食材','先煮熟蛋白质与耐煮食材','加入主食和其余蔬菜，调味后即可'] }
+    const title = selectedTitles[mainIndex % selectedTitles.length]
+    const protein = proteins[mainIndex % proteins.length]
+    mainIndex++
+    const isRice = title.includes('饭'), isPowder = /粉|米线/.test(title), isGrain = /杂粮|藜麦|全麦/.test(title)
+    const staple = isRice ? '即食米饭' : isPowder ? (title.includes('米线')?'米线':'粉丝') : isGrain ? '即食杂粮饭' : '荞麦面'
+    const minutes = Math.min(Number(prefs.max_minutes || 30), prefs.preference_mode === 'quick' ? 15 : 20)
+    return { id:slot,day,date,mealType,title,emoji:prefs.preference_mode==='light'?'🥗':mealType==='午餐'?'🍚':'🍲',minutes,tags:[prefs.preference_mode==='quick'?'快手':'主食轮换',`${minutes}分钟`],nutrition:'主食、蛋白质和蔬菜搭配完整',ingredients:[ing('番茄',1,'个','蔬菜'),ing('西兰花',150,'克','蔬菜'),ing(protein,100,'克','蛋白质'),ing(staple,1,'份','主食')],steps:['洗净并切好食材','处理蛋白质与耐煮食材','加入主食和蔬菜，调味后即可'] }
   })
   const breakfastCount = generated.filter(m => m.mealType === '早餐').length
   const mainCount = generated.length - breakfastCount
+  const modeName: Record<string,string> = {balanced:'合理搭配',quick:'15分钟快手',homestyle:'家常均衡',light:'轻食少油',custom:'自定义偏好'}
   return {
-    summary:`按你选择的${generated.length}顿来安排：选几顿，就只规划几顿。`,
-    weekStart:'2026-09-07',estimatedCostMin:breakfastCount*5+mainCount*8,estimatedCostMax:breakfastCount*9+mainCount*13,budgetWarning:false,
+    summary:`按「${modeName[prefs.preference_mode] || '合理搭配'}」为你安排${generated.length}顿，偏好用于排序，不会让每顿都一样。`,
+    weekStart:'2026-09-07',estimatedCostMin:breakfastCount*5+mainCount*8,estimatedCostMax:breakfastCount*9+mainCount*15,budgetWarning:false,
     meals:generated,shoppingList:shopping(generated),pantryUsed:['粉丝 2把','鸡蛋 2个'],
-    tips:['易坏食材优先安排在最早的用餐日','蛋白质按单顿分装，前一晚移到冷藏解冻','未选择的餐次不会生成，也不会计入采购量'],lastShoppingDelta:null,
+    tips:['易坏食材优先安排在最早的用餐日','主食和蛋白质会在一周内主动轮换','未选择的餐次不会生成，也不会计入采购量'],lastShoppingDelta:null,
   }
 }
 
-export const mockPlan = buildDemoPlan(defaultSlots)
+export const mockPlan = buildDemoPlan({ meal_slots:defaultSlots, preference_mode:'balanced', max_minutes:30 })
 
 export function demoSwap(plan: any, mealId: string) {
   const next = JSON.parse(JSON.stringify(plan))

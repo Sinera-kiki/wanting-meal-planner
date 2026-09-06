@@ -26,27 +26,16 @@ def _get_db_conn():
     required = ["APP_DB_HOST", "APP_DB_PORT", "APP_DB_NAME", "APP_DB_USER", "APP_DB_PASSWORD"]
     if not all(os.environ.get(key) for key in required):
         raise RuntimeError("database is not configured")
-    return psycopg.connect(
-        host=os.environ["APP_DB_HOST"], port=int(os.environ["APP_DB_PORT"]),
-        dbname=os.environ["APP_DB_NAME"], user=os.environ["APP_DB_USER"],
-        password=os.environ["APP_DB_PASSWORD"], row_factory=dict_row,
-    )
+    return psycopg.connect(host=os.environ["APP_DB_HOST"], port=int(os.environ["APP_DB_PORT"]), dbname=os.environ["APP_DB_NAME"], user=os.environ["APP_DB_USER"], password=os.environ["APP_DB_PASSWORD"], row_factory=dict_row)
 
 
 async def _llm_chat(messages: list[dict], max_tokens: int = 7000) -> str:
     """Provider-neutral OpenAI-compatible adapter used by the public repository."""
-    base_url = os.environ.get("APP_LLM_BASE_URL")
-    api_key = os.environ.get("APP_LLM_API_KEY")
-    model = os.environ.get("APP_LLM_MODEL")
+    base_url, api_key, model = os.environ.get("APP_LLM_BASE_URL"), os.environ.get("APP_LLM_API_KEY"), os.environ.get("APP_LLM_MODEL")
     if not base_url or not api_key or not model:
         raise RuntimeError("LLM service is not configured")
     async with httpx.AsyncClient(timeout=75) as client:
-        resp = await client.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": model, "messages": messages, "max_tokens": max_tokens,
-                  "response_format": {"type": "json_object"}},
-        )
+        resp = await client.post(f"{base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": model, "messages": messages, "max_tokens": max_tokens, "response_format": {"type": "json_object"}})
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"]
 
@@ -58,15 +47,19 @@ def _require_user(x_user_id: Optional[str]) -> dict:
     return {"userId": x_user_id, "username": x_user_id, "email": None}
 
 
-Category = Literal["蔬菜", "蛋白质", "主食", "调味及其他"]
+Category = Literal["蔬菜", "水果", "乳制品", "蛋白质", "主食", "调味及其他"]
 
 
 class Preferences(BaseModel):
     budget: int = Field(default=100, ge=30, le=500)
-    flavors: list[str] = Field(default_factory=lambda: ["酸辣", "清淡"])
+    flavors: list[str] = Field(default_factory=list)
     avoid: str = ""
     pantry: str = ""
-    max_minutes: int = Field(default=15, ge=10, le=60)
+    max_minutes: int = Field(default=30, ge=10, le=60)
+    preference_mode: Literal["balanced", "quick", "homestyle", "light", "custom"] = "balanced"
+    staple_preferences: list[str] = Field(default_factory=list)
+    meal_styles: list[str] = Field(default_factory=list)
+    equipment: list[str] = Field(default_factory=lambda: ["灶台"])
     meal_slots: list[str] = Field(
         default_factory=lambda: ["mon-d", "tue-d", "wed-d", "thu-d", "fri-d", "sat-l", "sat-d", "sun-l", "sun-d"],
         min_length=1, max_length=21,
@@ -189,7 +182,8 @@ def _is_banned(name: str, avoid: str) -> bool:
 
 def _safe_protein(avoid: str, index: int) -> tuple[str, str, float, str]:
     options = [("鸡蛋", "个", 1, "🥚"), ("嫩豆腐", "克", 120, "🥢"), ("虾滑", "克", 100, "🦐"),
-               ("鸡胸肉", "克", 100, "🍗"), ("豆皮", "克", 80, "🥢"), ("鹰嘴豆", "克", 100, "🫘")]
+               ("鸡胸肉", "克", 100, "🍗"), ("豆皮", "克", 80, "🥢"), ("鹰嘴豆", "克", 100, "🫘"),
+               ("鱼片", "克", 100, "🐟")]
     safe = [x for x in options if not _is_banned(x[0], avoid)] or [("鹰嘴豆", "克", 100, "🫘")]
     return safe[index % len(safe)]
 
@@ -200,48 +194,65 @@ def _fallback_meals(pref: Preferences, rotation: int = 0) -> list[Meal]:
         ("番茄鸡蛋全麦吐司", "番茄", 1, "个", "全麦吐司", 2, "片", "鸡蛋", 1, "个", "能量早餐"),
         ("玉米豆浆水果碗", "冷冻玉米", 100, "克", "无糖豆浆", 1, "盒", "苹果", 1, "个", "清爽早餐"),
         ("紫薯酸奶坚果碗", "紫薯", 1, "个", "无糖酸奶", 1, "盒", "坚果", 15, "克", "高纤早餐"),
-        ("豆腐蔬菜汤面", "番茄", 1, "个", "嫩豆腐", 100, "克", "挂面", 70, "克", "暖胃早餐"),
+        ("豆腐蔬菜全麦卷", "番茄", 1, "个", "全麦饼", 1, "张", "嫩豆腐", 100, "克", "均衡早餐"),
         ("花生酱香蕉吐司", "香蕉", 1, "个", "全麦吐司", 2, "片", "花生酱", 1, "份", "周末早餐"),
         ("燕麦鸡蛋蔬菜粥", "即食燕麦", 40, "克", "鸡蛋", 1, "个", "冷冻蔬菜", 80, "克", "饱腹早餐"),
     ]
+    # 备用餐单故意覆盖米饭、面食、粉类与杂粮轻食，避免默认被单一用户口味绑架。
     main = [
-        ("番茄青菜{p}面", "番茄", 1, "个", "小青菜", 150, "克", "挂面", 100, "克", "清淡鲜香"),
-        ("酸辣娃娃菜{p}土豆粉", "娃娃菜", 180, "克", "香菇", 80, "克", "土豆粉", 1, "包", "酸辣开胃"),
-        ("菠菜菌菇{p}粉丝汤", "菠菜", 150, "克", "鲜香菇", 100, "克", "粉丝", 1, "把", "清淡暖胃"),
-        ("番茄香菇{p}荞麦面", "番茄", 1, "个", "鲜香菇", 100, "克", "荞麦面", 100, "克", "鲜香耐饱"),
-        ("西兰花{p}拌面", "西兰花", 180, "克", "胡萝卜", 60, "克", "挂面", 100, "克", "少油快拌"),
-        ("胡萝卜玉米{p}汤面", "胡萝卜", 100, "克", "冷冻玉米", 80, "克", "荞麦面", 100, "克", "周末快手"),
-        ("金针菇酸汤{p}土豆粉", "金针菇", 120, "克", "番茄", 1, "个", "土豆粉", 1, "包", "酸汤满足"),
-        ("香菇胡萝卜{p}炒面", "鲜香菇", 100, "克", "胡萝卜", 100, "克", "挂面", 100, "克", "耐储食材"),
-        ("紫菜番茄{p}粉丝汤", "紫菜", 5, "克", "番茄", 1, "个", "粉丝", 1, "把", "清淡收尾"),
-        ("西葫芦{p}拌荞麦面", "西葫芦", 180, "克", "胡萝卜", 60, "克", "荞麦面", 100, "克", "清爽快拌"),
-        ("玉米番茄{p}米线", "冷冻玉米", 80, "克", "番茄", 1, "个", "米线", 1, "包", "酸甜鲜香"),
-        ("菌菇紫菜{p}汤面", "鲜香菇", 100, "克", "紫菜", 5, "克", "挂面", 100, "克", "鲜香暖胃"),
-        ("胡萝卜西兰花{p}米粉", "胡萝卜", 80, "克", "西兰花", 150, "克", "米粉", 1, "包", "轻盈均衡"),
-        ("番茄玉米{p}拌面", "番茄", 1, "个", "冷冻玉米", 80, "克", "挂面", 100, "克", "周末收尾"),
+        ("番茄青菜{p}汤面", "番茄", 1, "个", "小青菜", 150, "克", "挂面", 100, "克", "清淡鲜香", "面食", "汤羹"),
+        ("西兰花{p}盖饭", "西兰花", 180, "克", "胡萝卜", 60, "克", "即食米饭", 1, "份", "家常均衡", "米饭", "家常菜"),
+        ("菠菜菌菇{p}粉丝汤", "菠菜", 150, "克", "鲜香菇", 100, "克", "粉丝", 1, "把", "清淡暖胃", "粉类", "汤羹"),
+        ("彩蔬{p}杂粮碗", "西兰花", 150, "克", "冷冻玉米", 80, "克", "即食杂粮饭", 1, "份", "轻盈饱腹", "杂粮轻食", "轻食"),
+        ("香菇胡萝卜{p}拌饭", "鲜香菇", 100, "克", "胡萝卜", 100, "克", "即食米饭", 1, "份", "一碗满足", "米饭", "一锅端"),
+        ("番茄玉米{p}米线", "番茄", 1, "个", "冷冻玉米", 80, "克", "米线", 1, "包", "酸甜鲜香", "粉类", "一锅端"),
+        ("西葫芦{p}荞麦面", "西葫芦", 180, "克", "胡萝卜", 60, "克", "荞麦面", 100, "克", "清爽快拌", "面食", "轻食"),
+        ("紫菜豆腐{p}汤饭", "紫菜", 5, "克", "番茄", 1, "个", "即食米饭", 1, "份", "暖胃收尾", "米饭", "汤羹"),
+        ("西兰花{p}土豆泥碗", "西兰花", 150, "克", "土豆", 1, "个", "即食杂粮饭", 1, "份", "高纤饱腹", "杂粮轻食", "轻食"),
+        ("胡萝卜玉米{p}拌饭", "胡萝卜", 100, "克", "冷冻玉米", 80, "克", "即食米饭", 1, "份", "耐储食材", "米饭", "家常菜"),
+        ("菌菇{p}乌冬面", "鲜香菇", 120, "克", "西兰花", 120, "克", "乌冬面", 1, "包", "鲜香快手", "面食", "一锅端"),
+        ("番茄{p}米粉", "番茄", 1, "个", "金针菇", 100, "克", "米粉", 1, "包", "酸香开胃", "粉类", "汤羹"),
+        ("彩蔬{p}全麦卷", "生菜", 100, "克", "番茄", 1, "个", "全麦饼", 1, "张", "轻食便携", "杂粮轻食", "轻食"),
+        ("土豆胡萝卜{p}盖饭", "土豆", 1, "个", "胡萝卜", 80, "克", "即食米饭", 1, "份", "家常下饭", "米饭", "家常菜"),
     ]
+    preferred_staples = set(pref.staple_preferences)
+    preferred_styles = set(pref.meal_styles)
+    main = sorted(main, key=lambda x: -((3 if x[-2] in preferred_staples else 0) + (2 if x[-1] in preferred_styles else 0)))
     meals: list[Meal] = []
     main_index = 0
+    equipment = pref.equipment or ["灶台"]
     for index, (slot_id, day_name, meal_type) in enumerate(_selected_slots(pref)):
         if meal_type == "早餐":
             template, veg1, q1, u1, staple, qs, us, protein, pq, pu, tag = breakfast[(DAY_INDEX[day_name] + rotation) % len(breakfast)]
             if _is_banned(protein, pref.avoid):
                 protein, pu, pq, _ = _safe_protein(pref.avoid, index + rotation)
             title = template if not _is_banned(template, pref.avoid) else f"{veg1}{protein}{staple}早餐"
-            ingredients = [I(veg1, q1, u1, "蔬菜"), I(staple, qs, us, "主食"), I(protein, pq, pu, "蛋白质")]
+            first_category: Category = "水果" if any(x in veg1 for x in ("香蕉", "苹果", "水果")) else "蔬菜"
+            protein_category: Category = "乳制品" if any(x in protein for x in ("酸奶", "牛奶")) else "蛋白质"
+            ingredients = [I(veg1, q1, u1, first_category), I(staple, qs, us, "主食"), I(protein, pq, pu, protein_category)]
             emoji = "☀️"
         else:
             base = main[(main_index + rotation) % len(main)]
             main_index += 1
-            template, veg1, q1, u1, veg2, q2, u2, staple, qs, us, tag = base
+            template, veg1, q1, u1, veg2, q2, u2, staple, qs, us, tag, _, _ = base
             protein, pu, pq, emoji = _safe_protein(pref.avoid, index + rotation)
             title = template.format(p=protein)
             ingredients = [I(veg1, q1, u1, "蔬菜"), I(veg2, q2, u2, "蔬菜"), I(protein, pq, pu, "蛋白质"), I(staple, qs, us, "主食")]
+        if "灶台" in equipment:
+            steps = ["洗净并准备所有食材", "用锅先处理蛋白质和耐煮食材", "加入主食和其余食材，调味后即可开饭"]
+        elif "微波炉" in equipment:
+            steps = ["食材切成小块放入可微波容器", "加入少量水，分段加热并中途翻拌", "确认熟透后加入主食和调味料"]
+        elif "空气炸锅" in equipment and pref.max_minutes >= 15:
+            title = f"空气炸锅{veg1}{protein}能量碗"
+            steps = ["食材切小块并薄薄刷油", "空气炸锅加热至熟，中途翻面", "搭配即食主食和蔬菜装碗"]
+        else:
+            title = f"免开火{veg1}{protein}能量碗"
+            steps = ["选择可即食食材并洗净切块", "将主食、蔬菜和蛋白质分区装碗", "加入简单酱汁拌匀即可"]
+        minutes = min(pref.max_minutes, 15)
         meals.append(Meal(
-            id=slot_id, day=day_name, mealType=meal_type, title=title, emoji=emoji, minutes=15,
-            tags=[tag, "15分钟"], nutrition="主食、蛋白质和蔬菜搭配完整",
-            ingredients=ingredients,
-            steps=["洗净并准备所有食材", "先处理蛋白质和耐煮食材", "加入主食和其余食材，调味后即可开饭"],
+            id=slot_id, day=day_name, mealType=meal_type, title=title, emoji=emoji, minutes=minutes,
+            tags=[tag, f"{minutes}分钟"], nutrition="主食、蛋白质和蔬菜搭配完整",
+            ingredients=ingredients, steps=steps,
         ))
     return meals
 
@@ -253,6 +264,41 @@ def _canonical(name: str) -> str:
         "嫩豆腐": "豆腐", "老豆腐": "豆腐", "西红柿": "番茄", "鲜香菇": "香菇",
     }
     return aliases.get(name, name)
+
+
+STAPLE_GROUPS = {
+    "米饭": ("米饭", "大米", "白粥"),
+    "面食": ("面", "乌冬", "意面", "吐司", "全麦饼", "馒头"),
+    "粉类": ("粉丝", "米粉", "米线", "土豆粉", "年糕"),
+    "杂粮轻食": ("燕麦", "杂粮", "玉米", "紫薯", "土豆", "芋头"),
+}
+PROTEIN_GROUPS = {
+    "蛋类": ("鸡蛋", "蛋"), "豆制品": ("豆腐", "豆皮", "豆干", "豆浆"),
+    "禽类": ("鸡胸", "鸡腿", "鸡丝", "鸡肉"), "畜肉": ("牛", "猪", "肉末", "火腿"),
+    "水产": ("虾", "鱼", "海鲜"), "乳制品": ("酸奶", "牛奶"), "豆类": ("鹰嘴豆", "豆类"),
+}
+
+
+def _ingredient_group(meal: Meal, groups: dict[str, tuple[str, ...]]) -> Optional[str]:
+    names = " ".join(i.name for i in meal.ingredients)
+    for group, tokens in groups.items():
+        if any(token in names for token in tokens):
+            return group
+    return None
+
+
+def _equipment_error(meal: Meal, equipment: list[str]) -> bool:
+    equipment = equipment or ["灶台"]
+    if "灶台" in equipment:
+        return False
+    steps = " ".join(meal.steps)
+    if equipment == ["微波炉"]:
+        return any(word in steps for word in ("热锅", "翻炒", "焯水", "煮开", "空气炸锅", "电饭锅"))
+    if equipment == ["空气炸锅"]:
+        return "空气炸锅" not in steps and "免开火" not in steps
+    if equipment == ["电饭锅"]:
+        return "电饭锅" not in steps and "免开火" not in steps
+    return False
 
 
 def _parse_pantry(text: str) -> list[dict]:
@@ -301,7 +347,7 @@ def _shopping(meals: list[Meal], pantry: str = "") -> tuple[list[ShoppingItem], 
                 if consumed > 0:
                     used.append(f"{item.name} {consumed:g}{item.unit}")
                 break
-    order = {"蔬菜": 0, "蛋白质": 1, "主食": 2, "调味及其他": 3}
+    order = {"蔬菜": 0, "水果": 1, "乳制品": 2, "蛋白质": 3, "主食": 4, "调味及其他": 5}
     result = [x for x in merged.values() if x.quantity > 0]
     return sorted(result, key=lambda x: (order[x.category], x.name)), used
 
@@ -367,6 +413,8 @@ def _validate_plan(plan: Plan, pref: Preferences) -> list[str]:
             errors.append(f"{meal.id}超过时间限制")
         if _is_banned(joined, pref.avoid):
             errors.append(f"{meal.id}含忌口食材")
+        if _equipment_error(meal, pref.equipment):
+            errors.append(f"{meal.id}使用了不可用厨具")
     early_days_selected = any(DAY_INDEX[day] <= 2 for _, day, _ in slots)
     late_leafy = sum(
         1 for meal in plan.meals
@@ -379,6 +427,20 @@ def _validate_plan(plan: Plan, pref: Preferences) -> list[str]:
         count = sum(flavor in (m.title + "".join(m.tags)) for m in plan.meals)
         if count > flavor_limit:
             errors.append(f"{flavor}口味重复超过{flavor_limit}顿")
+    if len(plan.meals) >= 5:
+        staple_counts: dict[str, int] = {}
+        protein_counts: dict[str, int] = {}
+        for meal in plan.meals:
+            staple = _ingredient_group(meal, STAPLE_GROUPS)
+            protein = _ingredient_group(meal, PROTEIN_GROUPS)
+            if staple: staple_counts[staple] = staple_counts.get(staple, 0) + 1
+            if protein: protein_counts[protein] = protein_counts.get(protein, 0) + 1
+        staple_limit = max(2, round(len(plan.meals) * (0.55 if pref.staple_preferences else 0.45)))
+        if staple_counts and max(staple_counts.values()) > staple_limit:
+            errors.append(f"同一主食大类不应超过{staple_limit}顿")
+        protein_limit = 3 if len(plan.meals) <= 18 else 4
+        if protein_counts and max(protein_counts.values()) > protein_limit:
+            errors.append(f"同一蛋白质大类不应超过{protein_limit}顿")
     if plan.estimatedCostMin > plan.estimatedCostMax:
         errors.append("预算区间顺序错误")
     return errors
@@ -389,11 +451,17 @@ def _plan_prompt(pref: Preferences) -> str:
     slot_text = "、".join(f"{slot_id}={day}{meal_type}" for slot_id, day, meal_type in slots)
     count = len(slots)
     flavor_limit = max(1, round(count * 0.45))
-    return f"""你是一位擅长独居饮食规划的营养餐单助手。用户自由选择了{count}个用餐时段：{slot_text}。只为这些时段规划，不得补充未选择的餐次。每顿总耗时不超过{pref.max_minutes}分钟；早餐可使用燕麦、吐司、酸奶等快手搭配，午晚餐偏好粉面、粉丝、土豆粉等快手餐。
-预算：{pref.budget}元；偏好口味：{','.join(pref.flavors) or '不限'}；硬性忌口：{pref.avoid or '无'}；家中已有：{pref.pantry or '无'}。
-硬约束：忌口绝不能出现；易坏绿叶菜安排在用户较早选择的用餐日；同一包装跨餐复用；每顿包含主食、蛋白质和蔬果；口味只是偏好，同一种主要口味最多{flavor_limit}顿；菜名不重复；所有步骤总耗时真实不超过限制；价格给合理区间而非假精确值。
+    mode_names = {"balanced":"不挑，合理搭配", "quick":"15分钟快手", "homestyle":"家常均衡", "light":"轻食少油", "custom":"自定义"}
+    staple_text = ','.join(pref.staple_preferences) or '不限制，主动轮换米饭、面食、粉类和杂粮轻食'
+    style_text = ','.join(pref.meal_styles) or '不限制'
+    equipment_text = ','.join(pref.equipment) or '无厨具/免开火'
+    return f"""你是一位面向多种生活方式的独居饮食规划助手。用户选择了{count}个用餐时段：{slot_text}。只为这些时段规划，不得补充未选择的餐次。
+方案模式：{mode_names[pref.preference_mode]}；预算：{pref.budget}元；每顿总耗时不超过{pref.max_minutes}分钟；可用厨具：{equipment_text}。
+软偏好（只提高推荐概率，绝不能让每顿都一样）：主食={staple_text}；餐食风格={style_text}；口味={','.join(pref.flavors) or '不限制'}。
+硬性忌口：{pref.avoid or '无'}；家中已有：{pref.pantry or '无'}。
+硬约束：忌口绝不能出现；步骤只能使用用户拥有的厨具；易坏食材安排在较早用餐日；同一包装跨餐复用；菜名不重复；耗时真实不超过限制；价格给合理区间。选择5顿及以上时，默认同一主食大类不超过约45%，同一蛋白质大类不超过3次，并轮换米饭、面食、粉类、杂粮及不同烹饪方式；用户的主食偏好是倾向而不是唯一答案。
 只返回JSON，不要Markdown：{{"summary":"一句话","estimatedCostMin":整数,"estimatedCostMax":整数,"meals":[严格{count}个meal],"tips":[3条]}}。
-meal：{{"id":"指定slot id","day":"周一","mealType":"早餐/午餐/晚餐","title":"菜名","emoji":"emoji","minutes":15,"tags":["标签"],"nutrition":"一句话","ingredients":[{{"name":"食材","quantity":数值,"unit":"克/个/包/把/份/瓣/片/盒","category":"蔬菜/蛋白质/主食/调味及其他"}}],"steps":["步骤1","步骤2","步骤3"]}}。
+meal：{{"id":"指定slot id","day":"周一","mealType":"早餐/午餐/晚餐","title":"菜名","emoji":"emoji","minutes":15,"tags":["标签"],"nutrition":"一句话","ingredients":[{{"name":"食材","quantity":数值,"unit":"克/个/包/把/份/瓣/片/盒/张","category":"蔬菜/水果/乳制品/蛋白质/主食/调味及其他"}}],"steps":["步骤1","步骤2","步骤3"]}}。
 meal的id必须严格按这个顺序：{','.join(x[0] for x in slots)}。"""
 
 
@@ -500,7 +568,7 @@ async def swap_meal(body: SwapIn, x_user_id: Optional[str] = Header(None, alias=
         raise HTTPException(status_code=404, detail="没有找到这一顿")
     current = body.plan.meals[idx]
     available = sorted({i.name for m in body.plan.meals for i in m.ingredients})
-    prompt = f"""替换一顿独居快手餐。原餐：{current.model_dump_json(ensure_ascii=False)}。优先复用已采购食材和库存：{','.join(available)}；{body.preferences.pantry}。偏好：{','.join(body.preferences.flavors)}；硬性忌口：{body.preferences.avoid or '无'}。总耗时不超过{body.preferences.max_minutes}分钟，不能与其余菜名重复。只返回单个meal JSON，id/day/date/mealType保持原值，steps为3步，category只能是蔬菜/蛋白质/主食/调味及其他。"""
+    prompt = f"""替换一顿独居餐。原餐：{current.model_dump_json(ensure_ascii=False)}。优先复用已采购食材和库存：{','.join(available)}；{body.preferences.pantry}。软偏好：口味={','.join(body.preferences.flavors) or '不限'}，主食={','.join(body.preferences.staple_preferences) or '不限'}，风格={','.join(body.preferences.meal_styles) or '不限'}；硬性忌口：{body.preferences.avoid or '无'}；可用厨具：{','.join(body.preferences.equipment) or '无厨具'}。总耗时不超过{body.preferences.max_minutes}分钟，不能与其余菜名重复，不能把软偏好理解为每顿强制。只返回单个meal JSON，id/day/date/mealType保持原值，steps为3步，category只能是蔬菜/水果/乳制品/蛋白质/主食/调味及其他。"""
     replacement: Optional[Meal] = None
     try:
         raw = await _llm_chat([{"role": "user", "content": prompt}], max_tokens=2500)
@@ -508,7 +576,7 @@ async def swap_meal(body: SwapIn, x_user_id: Optional[str] = Header(None, alias=
         replacement.id, replacement.day, replacement.date, replacement.mealType = current.id, current.day, current.date, current.mealType
         joined = replacement.title + " " + " ".join(i.name for i in replacement.ingredients)
         other_titles = {m.title for m in body.plan.meals if m.id != current.id}
-        if replacement.minutes > body.preferences.max_minutes or _is_banned(joined, body.preferences.avoid) or replacement.title in other_titles:
+        if replacement.minutes > body.preferences.max_minutes or _is_banned(joined, body.preferences.avoid) or replacement.title in other_titles or _equipment_error(replacement, body.preferences.equipment):
             raise ValueError("replacement violates rules")
     except Exception:
         alternatives = _fallback_meals(body.preferences, rotation=3)
